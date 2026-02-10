@@ -113,9 +113,9 @@ File name: <prefix>_<timestamp>.tgz (no side/hostname in filename)
 
 Required:
   --repo-dir PATH
-  --output-dir PATH
 
-Optional:
+Optional (defaults):
+  --output-dir PATH          (default: syncpacks)
   --pack-prefix PREFIX       (default: syncpack)
   --machine-name NAME        (default: auto-detected; written to manifest only)
   --help
@@ -130,7 +130,7 @@ EOF
 require_tools
 
 REPO_DIR=""
-OUTPUT_DIR=""
+OUTPUT_DIR="syncpacks"
 PACK_PREFIX="syncpack"
 MACHINE_NAME=""
 
