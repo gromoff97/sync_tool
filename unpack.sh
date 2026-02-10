@@ -127,7 +127,7 @@ usage() {
 unpack.sh — apply latest .tgz pack from a directory, update ALL branches + tags
 
 Required:
-  --repo-dir PATH
+  --repo-dir PATH             (created with git init if missing)
 
 Optional (defaults):
   --pack-dir PATH             (default: syncpacks)
