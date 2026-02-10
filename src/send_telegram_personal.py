@@ -2,7 +2,8 @@
 import argparse
 import os
 import sys
-from typing import Dict, List, Optional, Set
+import time
+from typing import Callable, Dict, List, Optional, Set
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,6 +76,40 @@ def err(msg: str) -> None:
         print(f"\033[31m[ERROR]\033[0m {msg}", file=sys.stderr, flush=True)
     else:
         print(f"[ERROR] {msg}", file=sys.stderr, flush=True)
+
+
+def format_bytes(value: int) -> str:
+    units = ("B", "KB", "MB", "GB", "TB")
+    size = float(max(value, 0))
+    idx = 0
+    while size >= 1024.0 and idx < len(units) - 1:
+        size /= 1024.0
+        idx += 1
+    if idx == 0:
+        return f"{int(size)} {units[idx]}"
+    return f"{size:.1f} {units[idx]}"
+
+
+def make_upload_progress_logger() -> Callable[[int, int], None]:
+    last_bucket = -1
+    last_ts = 0.0
+
+    def cb(sent: int, total: int) -> None:
+        nonlocal last_bucket, last_ts
+        if total <= 0:
+            return
+
+        percent = int((sent * 100) / total)
+        bucket = percent // 5
+        now = time.monotonic()
+        if bucket == last_bucket and percent < 100 and (now - last_ts) < 2.0:
+            return
+
+        last_bucket = bucket
+        last_ts = now
+        py(f"Upload progress: {percent}% ({format_bytes(sent)} / {format_bytes(total)})")
+
+    return cb
 
 
 def looks_like_placeholder(value: str) -> bool:
@@ -186,6 +221,7 @@ def main() -> int:
     if not os.path.isfile(args.file):
         err(f"file not found: {args.file}")
         return 1
+    file_size = os.path.getsize(args.file)
 
     try:
         from colorama import just_fix_windows_console
@@ -302,14 +338,18 @@ def main() -> int:
                 remove_keys={"telegram_code", "telegram_password"},
             )
 
-        py("Uploading archive to Telegram...")
+        py(f"Uploading archive to Telegram ({format_bytes(file_size)})...")
         client.send_file(
             to_peer,
             args.file,
             caption=args.caption or None,
             parse_mode="md",
+            progress_callback=make_upload_progress_logger(),
         )
         py("Upload completed.")
+    except KeyboardInterrupt:
+        err("Interrupted by user.")
+        return 130
     except FloodWaitError as exc:
         seconds = getattr(exc, "seconds", None)
         if seconds is None:
@@ -321,7 +361,12 @@ def main() -> int:
         err(f"Telegram personal upload failed: {exc}")
         return 1
     finally:
-        client.disconnect()
+        try:
+            client.disconnect()
+        except KeyboardInterrupt:
+            pass
+        except Exception:
+            pass
 
     return 0
 
