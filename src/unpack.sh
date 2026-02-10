@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-die() { echo "ERROR: $*" >&2; exit 1; }
-warn() { echo "WARN: $*" >&2; }
+die() { echo "[ERR] $*" >&2; exit 1; }
+warn() { echo "[APP] WARN: $*" >&2; }
+info() { echo "[APP] $*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 require_tools() {
@@ -313,11 +314,11 @@ if [[ "$MODE" == "bootstrap" ]]; then
   [[ ! -e "$TARGET_REPO" ]] || die "Target path already exists: $TARGET_REPO"
 fi
 
-echo "INFO: picked latest pack: $PACK_FILE"
-echo "INFO: project: $PROJECT_NAME"
-echo "INFO: peer namespace: refs/remotes/$PEER/*"
+info "Picked latest pack: $PACK_FILE"
+info "Project: $PROJECT_NAME"
+info "Peer namespace: refs/remotes/$PEER/*"
 if [[ "$MODE" == "bootstrap" ]]; then
-  echo "INFO: target repo will be created at: $TARGET_REPO"
+  info "Target repo will be created at: $TARGET_REPO"
 fi
 
 tmp="$(mktemp_dir)"
@@ -423,8 +424,10 @@ if [[ "$FF_ONLY" == "1" ]]; then
     fi
   done
   if [[ "${#diverged[@]}" -gt 0 ]]; then
-    echo "DIVERGED branches (fast-forward impossible). Local branches NOT updated:" >&2
-    printf '  - %s\n' "${diverged[@]}" >&2
+    warn "DIVERGED branches (fast-forward impossible). Local branches NOT updated:"
+    for b in "${diverged[@]}"; do
+      warn "  - $b"
+    done
     die "Resolve manually (merge/rebase), or use --ff-only 0 (dangerous)."
   fi
 fi
@@ -483,11 +486,11 @@ fi
 if ! rm -f -- "$PACK_FILE"; then
   warn "Applied, but failed to delete pack: $PACK_FILE"
 else
-  echo "INFO: deleted pack: $PACK_FILE"
+  info "Deleted pack: $PACK_FILE"
 fi
 
 if [[ "$MODE" == "bootstrap" ]]; then
-  echo "OK: created repository at $REPO_DIR and applied ${#branches[@]} branch(es) and tags (peer=$PEER)."
+  info "Created repository at $REPO_DIR and applied ${#branches[@]} branch(es) and tags (peer=$PEER)."
 else
-  echo "OK: updated ${#branches[@]} branch(es) and tags (peer=$PEER)."
+  info "Updated ${#branches[@]} branch(es) and tags (peer=$PEER)."
 fi

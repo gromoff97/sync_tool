@@ -19,30 +19,24 @@ if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   if supports_256_color; then
     USE_256_COLOR="1"
     C_APP=$'\033[38;5;45m'
-    C_GIT=$'\033[38;5;208m'
-    C_TAR=$'\033[38;5;220m'
     C_ERR=$'\033[38;5;196m'
   else
     USE_256_COLOR="0"
     C_APP=$'\033[34m'
-    C_GIT=$'\033[36m'
-    C_TAR=$'\033[33m'
     C_ERR=$'\033[31m'
   fi
 else
   USE_256_COLOR="0"
   C_RESET=''
   C_APP=''
-  C_GIT=''
-  C_TAR=''
   C_ERR=''
 fi
 
 log_line()  { local color="$1" tag="$2"; shift 2; printf '%b[%s]%b %s\n' "$color" "$tag" "$C_RESET" "$*"; }
 err_line()  { local color="$1" tag="$2"; shift 2; printf '%b[%s]%b %s\n' "$color" "$tag" "$C_RESET" "$*" >&2; }
 log_pack()  { log_line "$C_APP" "APP" "$*"; }
-log_git()   { log_line "$C_GIT" "GIT" "$*"; }
-log_tar()   { log_line "$C_TAR" "TAR" "$*"; }
+log_git()   { log_line "$C_APP" "APP" "$*"; }
+log_tar()   { log_line "$C_APP" "APP" "$*"; }
 log_ok()    { log_line "$C_APP" "APP" "$*"; }
 die()       { err_line "$C_ERR" "ERR" "$*"; exit 1; }
 
@@ -457,7 +451,7 @@ cleanup() {
         log_pack "Removed local file after failure: $final_path"
       fi
     else
-      err_line "$C_RED" "ERR" "Failed to delete local pack after failure: $final_path"
+      err_line "$C_ERR" "ERR" "Failed to delete local pack after failure: $final_path"
     fi
   fi
 }
