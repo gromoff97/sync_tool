@@ -1,9 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-die() { echo "[ERR] $*" >&2; exit 1; }
-warn() { echo "[WRN] $*" >&2; }
-info() { echo "[APP] $*"; }
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  C_RESET=$'\033[0m'
+  C_APP=$'\033[36m'
+  C_WRN=$'\033[33m'
+  C_ERR=$'\033[31m'
+else
+  C_RESET=''
+  C_APP=''
+  C_WRN=''
+  C_ERR=''
+fi
+
+die() { printf '%b[ERR]%b %s\n' "$C_ERR" "$C_RESET" "$*" >&2; exit 1; }
+warn() { printf '%b[WRN]%b %s\n' "$C_WRN" "$C_RESET" "$*" >&2; }
+info() { printf '%b[APP]%b %s\n' "$C_APP" "$C_RESET" "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 require_tools() {
