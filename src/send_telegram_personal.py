@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import logging
 import os
 import re
 import sys
@@ -365,6 +366,12 @@ def main() -> int:
     except Exception:
         err("telethon is not installed. Install it with: pip install telethon")
         return 2
+
+    # Keep terminal output clean: only our own [PY]/[ERROR] messages.
+    telethon_logger = logging.getLogger("telethon")
+    telethon_logger.handlers = [logging.NullHandler()]
+    telethon_logger.propagate = False
+    telethon_logger.setLevel(logging.CRITICAL + 1)
 
     try:
         py("Collecting Telegram connection settings...")
