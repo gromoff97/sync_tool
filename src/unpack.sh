@@ -124,12 +124,32 @@ load_config_overrides() {
       force_tags|FORCE_TAGS)                     FORCE_TAGS="$value" ;;
       prune_remote_refs|PRUNE_REMOTE_REFS)       PRUNE_REMOTE_REFS="$value" ;;
       prune_local_branches|PRUNE_LOCAL_BRANCHES) PRUNE_LOCAL_BRANCHES="$value" ;;
+      clean_peer_refs|CLEAN_PEER_REFS)           CLEAN_PEER_REFS="$value" ;;
       *) ;;
     esac
   done < "$cfg"
 }
 
 gitpath() { git -C "$1" rev-parse --git-path "$2"; }
+
+cleanup_peer_refs() {
+  [[ "$CLEAN_PEER_REFS" == "1" ]] || return 0
+
+  local refs
+  mapfile -t refs < <(git -C "$REPO_DIR" for-each-ref --format='%(refname)' "refs/remotes/$PEER/" | tr -d '\r')
+  if [[ "${#refs[@]}" -gt 0 ]]; then
+    for r in "${refs[@]}"; do
+      git -C "$REPO_DIR" update-ref -d "$r" >/dev/null || warn "Failed to delete peer ref: $r"
+    done
+    info "Removed peer refs: ${#refs[@]}"
+  fi
+
+  local fetch_head
+  fetch_head="$(gitpath "$REPO_DIR" FETCH_HEAD)"
+  if [[ -f "$fetch_head" ]]; then
+    rm -f "$fetch_head" 2>/dev/null || warn "Failed to delete FETCH_HEAD"
+  fi
+}
 
 ensure_repo_ok_and_clean() {
   local repo="$1"
@@ -234,13 +254,14 @@ Optional (defaults):
   --force-tags 0|1             (default: 0)
   --prune-remote-refs 0|1      (default: 1)
   --prune-local-branches 0|1   (default: 0)
+  --clean-peer-refs 0|1        (default: 1) remove refs/remotes/<peer>/*
   --help
 
 Config:
   <tool_dir>/conf/unpack.conf (if present) overrides CLI options.
   Supported keys include:
     pack_dir, pack_prefix, project_name, peer,
-    ff_only, force_tags, prune_remote_refs, prune_local_branches
+    ff_only, force_tags, prune_remote_refs, prune_local_branches, clean_peer_refs
 
 Example:
   ./unpack --pack-dir /c/Work/in
@@ -261,6 +282,7 @@ FF_ONLY="1"
 FORCE_TAGS="0"
 PRUNE_REMOTE_REFS="1"
 PRUNE_LOCAL_BRANCHES="0"
+CLEAN_PEER_REFS="1"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -282,6 +304,8 @@ while [[ $# -gt 0 ]]; do
     --prune-remote-refs=*)    PRUNE_REMOTE_REFS="${1#*=}"; shift 1;;
     --prune-local-branches)   PRUNE_LOCAL_BRANCHES="${2:-}"; shift 2;;
     --prune-local-branches=*) PRUNE_LOCAL_BRANCHES="${1#*=}"; shift 1;;
+    --clean-peer-refs)        CLEAN_PEER_REFS="${2:-}"; shift 2;;
+    --clean-peer-refs=*)      CLEAN_PEER_REFS="${1#*=}"; shift 1;;
 
     --help|-h)                usage;;
     *) die "Unknown option: $1 (use --help)";;
@@ -301,6 +325,7 @@ load_config_overrides "$CONFIG_FILE"
 [[ "$FORCE_TAGS" == "0" || "$FORCE_TAGS" == "1" ]] || die "--force-tags must be 0|1"
 [[ "$PRUNE_REMOTE_REFS" == "0" || "$PRUNE_REMOTE_REFS" == "1" ]] || die "--prune-remote-refs must be 0|1"
 [[ "$PRUNE_LOCAL_BRANCHES" == "0" || "$PRUNE_LOCAL_BRANCHES" == "1" ]] || die "--prune-local-branches must be 0|1"
+[[ "$CLEAN_PEER_REFS" == "0" || "$CLEAN_PEER_REFS" == "1" ]] || die "--clean-peer-refs must be 0|1"
 
 REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 MODE="existing"
@@ -442,6 +467,7 @@ if [[ "$MODE" == "existing" ]]; then
 
   if [[ "$identical" == "1" ]]; then
     info "Bundle already applied; repository matches pack."
+    cleanup_peer_refs
     if ! rm -f -- "$PACK_FILE"; then
       warn "Matched, but failed to delete pack: $PACK_FILE"
     else
@@ -496,12 +522,20 @@ if [[ "$FORCE_TAGS" == "0" ]]; then
 fi
 
 if [[ "$PRUNE_REMOTE_REFS" == "1" ]]; then
+  removed_remote=0
   while IFS= read -r b; do
     [[ -n "$b" ]] || continue
     if ! grep -Fxq "$b" "$incoming_list"; then
-      git -C "$REPO_DIR" update-ref -d "refs/remotes/$PEER/$b" || warn "Failed to delete remote ref: $PEER/$b"
+      if git -C "$REPO_DIR" update-ref -d "refs/remotes/$PEER/$b"; then
+        removed_remote=$((removed_remote + 1))
+      else
+        warn "Failed to delete remote ref: $PEER/$b"
+      fi
     fi
   done < <(git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=3)' "refs/remotes/$PEER/" | tr -d '\r' | sort)
+  if [[ "$removed_remote" -gt 0 ]]; then
+    info "Pruned remote refs: $removed_remote"
+  fi
 fi
 
 mapfile -t branches < <(git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=3)' "refs/remotes/$PEER/" | tr -d '\r' | sort)
@@ -584,6 +618,8 @@ if [[ "$MODE" == "bootstrap" ]]; then
   fi
   git -C "$REPO_DIR" checkout -f "$checkout_branch" >/dev/null || die "Failed to checkout '$checkout_branch' in $REPO_DIR"
 fi
+
+cleanup_peer_refs
 
 if ! rm -f -- "$PACK_FILE"; then
   warn "Applied, but failed to delete pack: $PACK_FILE"
