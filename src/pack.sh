@@ -1,8 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-die() { echo "ERROR: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_RED=$'\033[31m'
+  C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'
+  C_CYAN=$'\033[36m'
+  C_GREEN=$'\033[32m'
+else
+  C_RESET=''
+  C_BOLD=''
+  C_RED=''
+  C_YELLOW=''
+  C_BLUE=''
+  C_CYAN=''
+  C_GREEN=''
+fi
+
+log_info()  { printf '%b[INFO]%b %s\n' "$C_CYAN" "$C_RESET" "$*"; }
+log_step()  { printf '%b[STEP]%b %s\n' "$C_BLUE" "$C_RESET" "$*"; }
+log_warn()  { printf '%b[WARN]%b %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
+log_ok()    { printf '%b[OK]%b   %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+die()       { printf '%b[ERROR]%b %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
 
 require_tools() {
   have git || die "git not found"
@@ -64,6 +87,20 @@ sanitize_for_manifest() {
   local s="$1"
   s="$(echo "$s" | tr -d '\r\n')"
   [[ -n "$s" ]] || s="unknown"
+  printf '%s' "$s"
+}
+
+escape_md() {
+  # Escape common Markdown meta chars for Telegram 'md' parse mode.
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\*/\\*}"
+  s="${s//_/\\_}"
+  s="${s//\`/\\\`}"
+  s="${s//[/\\[}"
+  s="${s//]/\\]}"
+  s="${s//(/\\(}"
+  s="${s//)/\\)}"
   printf '%s' "$s"
 }
 
@@ -130,18 +167,18 @@ load_config_overrides() {
 
 load_telegram_config() {
   local cfg="$1"
-  [[ -f "$cfg" ]] || die "Telegram send requested (-s), but config not found: $cfg"
-
   TG_API_ID=""
   TG_API_HASH=""
   TG_TO=""
-  TG_SESSION="${HOME:+$HOME/.sync_tool_telegram}"
+  TG_SESSION=""
   TG_SESSION_STRING=""
   TG_PHONE=""
   TG_CODE=""
   TG_PASSWORD=""
   TG_CAPTION=""
   TG_PYTHON_MIN="3.8"
+
+  [[ -f "$cfg" ]] || return 0
 
   local raw line key value
   while IFS= read -r raw || [[ -n "$raw" ]]; do
@@ -170,11 +207,7 @@ load_telegram_config() {
     esac
   done < "$cfg"
 
-  [[ -n "$TG_API_ID" ]] || die "telegram_api_id is required in $cfg"
-  [[ -n "$TG_API_HASH" ]] || die "telegram_api_hash is required in $cfg"
-  [[ -n "$TG_TO" ]] || die "telegram_to is required in $cfg"
-  [[ "$TG_API_ID" =~ ^[0-9]+$ ]] || die "telegram_api_id must be an integer in $cfg"
-  [[ -n "$TG_SESSION" || -n "$TG_SESSION_STRING" ]] || die "Set telegram_session or telegram_session_string in $cfg"
+  [[ -z "$TG_API_ID" || "$TG_API_ID" =~ ^[0-9]+$ ]] || die "telegram_api_id must be an integer in $cfg"
   [[ "$TG_PYTHON_MIN" =~ ^[0-9]+\.[0-9]+$ ]] || die "telegram_python_min must be MAJOR.MINOR in $cfg"
 }
 
@@ -305,14 +338,16 @@ Optional (defaults):
 
 Config:
   <tool_dir>/conf/pack.conf (if present) overrides pack options above.
-  <tool_dir>/conf/telegram.conf used only with -s; required keys:
+  <tool_dir>/conf/telegram.conf used only with -s.
+                       Missing values are requested interactively on first run
+                       and persisted back to telegram.conf automatically.
+                       supported keys:
                        telegram_api_id, telegram_api_hash, telegram_to
-                       optional keys:
                        telegram_session or telegram_session_string
                        telegram_phone, telegram_code, telegram_password
                        (code can be entered interactively)
                        telegram_caption, telegram_python_min
-                       default caption (if not set): From <machine_name>
+                       default caption (if not set): From **machine_name**
                        (default python minimum: 3.8)
 
 Example:
@@ -370,6 +405,9 @@ PROJECT_NAME="$(sanitize_for_manifest "$PROJECT_NAME")"
 
 mkdir -p "$OUTPUT_DIR" || die "Cannot create --output-dir: $OUTPUT_DIR"
 ensure_repo_ok_and_clean "$REPO_DIR"
+log_info "Repository: $REPO_DIR"
+log_info "Project: $PROJECT_NAME"
+log_info "Output directory: $OUTPUT_DIR"
 
 repo_roots_sha="$(repo_roots_fingerprint "$REPO_DIR")"
 
@@ -380,6 +418,7 @@ trap cleanup EXIT
 bundle="$tmp/bundle.bundle"
 manifest="$tmp/manifest.tsv"
 
+log_step "Creating full git bundle (branches + tags)..."
 git -C "$REPO_DIR" bundle create "$bundle" --branches --tags >/dev/null || die "git bundle create failed"
 
 verify_out="$tmp/bundle_verify.txt"
@@ -411,6 +450,7 @@ final_path="$OUTPUT_DIR/$final"
 tmp_out="$OUTPUT_DIR/.${final}.tmp.$$"
 rm -f "$tmp_out" 2>/dev/null || true
 
+log_step "Building archive: $final"
 tar -czf "$tmp_out" -C "$tmp" "bundle.bundle" "manifest.tsv" || die "tar failed"
 
 tar -tzf "$tmp_out" | tr -d '\r' | awk 'BEGIN{b=0;m=0;bad=0}
@@ -425,12 +465,13 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
   TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
   load_telegram_config "$TELEGRAM_CONFIG_FILE"
   if [[ -z "$TG_CAPTION" ]]; then
-    TG_CAPTION="From <${MACHINE_NAME}>"
+    TG_CAPTION="From **$(escape_md "$MACHINE_NAME")**"
   fi
 
+  log_step "Sending archive to Telegram..."
   send_to_telegram_personal "$final_path" "$TG_CAPTION" "$TELEGRAM_CONFIG_FILE"
   rm -f -- "$final_path" || die "Uploaded to Telegram, but failed to delete local pack: $final_path"
-  echo "OK: uploaded to Telegram and removed local pack: $final_path"
+  log_ok "Uploaded to Telegram and removed local file: $final_path"
 else
-  echo "OK: $final_path"
+  log_ok "Pack created: $final_path"
 fi
