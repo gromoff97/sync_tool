@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import getpass
 import os
 import sys
 from typing import Dict, List, Optional, Set
@@ -74,10 +73,9 @@ def update_conf_file(path: str, updates: Optional[Dict[str, str]] = None, remove
 
 
 def prompt_input(prompt: str, secret: bool = False) -> str:
-    # First try normal stdin/stderr (works in most terminals).
+    # In Git Bash + Windows Python, getpass can block without visible prompt.
+    # Use plain input() first for reliability (password may be echoed).
     try:
-        if secret:
-            return getpass.getpass(prompt).strip()
         return input(prompt).strip()
     except (EOFError, OSError):
         pass
@@ -158,6 +156,7 @@ def main() -> int:
                 return 3
 
             try:
+                print("INFO: verifying login code...", flush=True)
                 client.sign_in(
                     phone=phone,
                     code=code,
@@ -173,6 +172,7 @@ def main() -> int:
                         file=sys.stderr,
                     )
                     return 3
+                print("INFO: verifying 2FA password...", flush=True)
                 client.sign_in(password=password)
 
             # Persist stable auth settings and drop one-time secrets from config.
@@ -182,7 +182,9 @@ def main() -> int:
                 remove_keys={"telegram_code", "telegram_password"},
             )
 
+        print("INFO: uploading archive to Telegram...", flush=True)
         client.send_file(args.to, args.file, caption=args.caption or None)
+        print("INFO: upload completed.", flush=True)
     except Exception as exc:
         print(f"ERROR: Telegram personal upload failed: {exc}", file=sys.stderr)
         return 1
