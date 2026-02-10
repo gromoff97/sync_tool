@@ -102,6 +102,7 @@ load_config_overrides() {
     case "$key" in
       pack_dir|PACK_DIR)                         PACK_DIR="$(expand_user_path "$value")" ;;
       pack_prefix|PACK_PREFIX)                   PACK_PREFIX="$value" ;;
+      project_name|PROJECT_NAME)                 PROJECT_NAME="$value" ;;
       peer|PEER)                                 PEER="$value" ;;
       ff_only|FF_ONLY)                           FF_ONLY="$value" ;;
       force_tags|FORCE_TAGS)                     FORCE_TAGS="$value" ;;
@@ -152,21 +153,27 @@ repo_roots_fingerprint() {
 }
 
 pick_latest_pack() {
-  local dir="$1" prefix="$2" project="$3"
+  local dir="$1" prefix="$2" project="${3:-}"
   [[ -d "$dir" ]] || die "--pack-dir is not a directory: $dir"
 
   shopt -s nullglob
-  local files=( "$dir"/"${prefix}_${project}_"*.tgz )
+  local files=( "$dir"/"${prefix}_"*.tgz )
   shopt -u nullglob
 
-  [[ "${#files[@]}" -gt 0 ]] || die "No packs found in $dir for project '$project' and prefix '$prefix'"
+  [[ "${#files[@]}" -gt 0 ]] || die "No packs found in $dir for prefix '$prefix'"
 
-  local best="" best_ts="" f base ts
+  local best="" best_ts="" f base rest pack_project ts
   for f in "${files[@]}"; do
     base="$(basename "$f")"
-    ts="${base#${prefix}_${project}_}"
-    ts="${ts%.tgz}"
-    if [[ "$ts" =~ ^[0-9]{8}_[0-9]{6}$ ]]; then
+    rest="${base#${prefix}_}"
+    [[ "$rest" != "$base" ]] || continue
+
+    if [[ "$rest" =~ ^(.+)_([0-9]{8}_[0-9]{6})\.tgz$ ]]; then
+      pack_project="${BASH_REMATCH[1]}"
+      ts="${BASH_REMATCH[2]}"
+      if [[ -n "$project" && "$pack_project" != "$project" ]]; then
+        continue
+      fi
       if [[ -z "$best_ts" || "$ts" > "$best_ts" ]]; then
         best_ts="$ts"
         best="$f"
@@ -174,18 +181,38 @@ pick_latest_pack() {
     fi
   done
 
-  [[ -n "$best" ]] || die "No packs with valid timestamp in name: ${prefix}_${project}_YYYYMMDD_HHMMSS.tgz"
+  if [[ -n "$project" ]]; then
+    [[ -n "$best" ]] || die "No packs found in $dir for project '$project' and prefix '$prefix'"
+  else
+    [[ -n "$best" ]] || die "No packs with valid timestamp in name: ${prefix}_<project>_YYYYMMDD_HHMMSS.tgz"
+  fi
+
   printf '%s' "$best"
+}
+
+project_from_pack_name() {
+  local prefix="$1" pack_file="$2"
+  local base rest
+  base="$(basename "$pack_file")"
+  rest="${base#${prefix}_}"
+  [[ "$rest" != "$base" ]] || return 1
+  if [[ "$rest" =~ ^(.+)_([0-9]{8}_[0-9]{6})\.tgz$ ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
 }
 
 usage() {
   cat >&2 <<'EOF'
 unpack.sh — apply latest .tgz pack from a directory, update ALL branches + tags
-Must be run inside the target git repository.
+If run inside a git repository, updates that repository.
+If run outside a git repository, creates a new repository from the latest pack.
 
 Optional (defaults):
   --pack-dir PATH             (default: ~/syncpacks)
   --pack-prefix PREFIX         (default: syncpack)
+  --project-name NAME          (default: autodetect from current repo or selected pack)
   --peer NAME                  (default: sync)
   --ff-only 0|1                (default: 1)
   --force-tags 0|1             (default: 0)
@@ -195,6 +222,9 @@ Optional (defaults):
 
 Config:
   <tool_dir>/conf/unpack.conf (if present) overrides CLI options.
+  Supported keys include:
+    pack_dir, pack_prefix, project_name, peer,
+    ff_only, force_tags, prune_remote_refs, prune_local_branches
 
 Example:
   ./unpack --pack-dir /c/Work/in
@@ -209,6 +239,7 @@ PACK_DIR="${HOME:+$HOME/syncpacks}"
 PACK_PREFIX="syncpack"
 
 # defaults per your request
+PROJECT_NAME=""
 PEER="sync"
 FF_ONLY="1"
 FORCE_TAGS="0"
@@ -221,6 +252,8 @@ while [[ $# -gt 0 ]]; do
     --pack-dir=*)             PACK_DIR="${1#*=}"; shift 1;;
     --pack-prefix)            PACK_PREFIX="${2:-}"; shift 2;;
     --pack-prefix=*)          PACK_PREFIX="${1#*=}"; shift 1;;
+    --project-name)           PROJECT_NAME="${2:-}"; shift 2;;
+    --project-name=*)         PROJECT_NAME="${1#*=}"; shift 1;;
 
     --peer)                   PEER="${2:-}"; shift 2;;
     --peer=*)                 PEER="${1#*=}"; shift 1;;
@@ -239,9 +272,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-[[ -n "$REPO_DIR" ]] || die "Run unpack.sh inside a git repository."
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -256,13 +286,39 @@ load_config_overrides "$CONFIG_FILE"
 [[ "$PRUNE_REMOTE_REFS" == "0" || "$PRUNE_REMOTE_REFS" == "1" ]] || die "--prune-remote-refs must be 0|1"
 [[ "$PRUNE_LOCAL_BRANCHES" == "0" || "$PRUNE_LOCAL_BRANCHES" == "1" ]] || die "--prune-local-branches must be 0|1"
 
-PROJECT_NAME="$(basename "$REPO_DIR")"
-
-ensure_repo_ok_and_clean "$REPO_DIR"
+REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+MODE="existing"
+if [[ -n "$REPO_DIR" ]]; then
+  local_project_name="$(basename "$REPO_DIR")"
+  if [[ -n "$PROJECT_NAME" && "$PROJECT_NAME" != "$local_project_name" ]]; then
+    warn "--project-name is ignored when running inside an existing repository."
+  fi
+  PROJECT_NAME="$local_project_name"
+  ensure_repo_ok_and_clean "$REPO_DIR"
+else
+  MODE="bootstrap"
+fi
 
 PACK_FILE="$(pick_latest_pack "$PACK_DIR" "$PACK_PREFIX" "$PROJECT_NAME")"
+pack_project="$(project_from_pack_name "$PACK_PREFIX" "$PACK_FILE" || true)"
+[[ -n "$pack_project" ]] || die "Pack file has invalid name: $(basename "$PACK_FILE")"
+if [[ -z "$PROJECT_NAME" ]]; then
+  PROJECT_NAME="$pack_project"
+fi
+[[ "$PROJECT_NAME" == "$pack_project" ]] || die "Selected pack project mismatch (expected '$PROJECT_NAME', got '$pack_project')."
+
+TARGET_REPO=""
+if [[ "$MODE" == "bootstrap" ]]; then
+  TARGET_REPO="$(pwd)/$PROJECT_NAME"
+  [[ ! -e "$TARGET_REPO" ]] || die "Target path already exists: $TARGET_REPO"
+fi
+
 echo "INFO: picked latest pack: $PACK_FILE"
+echo "INFO: project: $PROJECT_NAME"
 echo "INFO: peer namespace: refs/remotes/$PEER/*"
+if [[ "$MODE" == "bootstrap" ]]; then
+  echo "INFO: target repo will be created at: $TARGET_REPO"
+fi
 
 tmp="$(mktemp_dir)"
 cleanup() { rm -rf "$tmp" 2>/dev/null || true; }
@@ -284,13 +340,9 @@ manifest="$tmp/manifest.tsv"
 [[ -f "$bundle" ]] || die "bundle.bundle missing after extraction"
 [[ -f "$manifest" ]] || die "manifest.tsv missing after extraction"
 
-expected_repo_roots_sha="$(read_manifest_value "$manifest" repo_roots_sha256 || true)"
-if [[ -z "${expected_repo_roots_sha:-}" ]]; then
-  die "Pack missing repo_roots_sha256. Recreate pack with updated pack.sh."
-fi
-local_repo_roots_sha="$(repo_roots_fingerprint "$REPO_DIR")"
-if [[ "$local_repo_roots_sha" != "$expected_repo_roots_sha" ]]; then
-  die "Repository identity mismatch (pack=$expected_repo_roots_sha, local=$local_repo_roots_sha)."
+manifest_project_name="$(read_manifest_value "$manifest" project_name || true)"
+if [[ -n "$manifest_project_name" && "$manifest_project_name" != "$PROJECT_NAME" ]]; then
+  die "Project mismatch (pack='$manifest_project_name', expected='$PROJECT_NAME')."
 fi
 
 expected_bundle_sha="$(read_manifest_value "$manifest" bundle_sha256 || true)"
@@ -299,6 +351,21 @@ if [[ -n "${expected_bundle_sha:-}" ]]; then
   [[ "$actual_bundle_sha" == "$expected_bundle_sha" ]] || die "Bundle SHA256 mismatch (corrupted transfer?)"
 else
   warn "No bundle_sha256 in manifest (skipping integrity check)"
+fi
+
+if [[ "$MODE" == "existing" ]]; then
+  expected_repo_roots_sha="$(read_manifest_value "$manifest" repo_roots_sha256 || true)"
+  if [[ -z "${expected_repo_roots_sha:-}" ]]; then
+    die "Pack missing repo_roots_sha256. Recreate pack with updated pack.sh."
+  fi
+  local_repo_roots_sha="$(repo_roots_fingerprint "$REPO_DIR")"
+  if [[ "$local_repo_roots_sha" != "$expected_repo_roots_sha" ]]; then
+    die "Repository identity mismatch (pack=$expected_repo_roots_sha, local=$local_repo_roots_sha)."
+  fi
+else
+  mkdir -p "$TARGET_REPO" || die "Cannot create target directory: $TARGET_REPO"
+  git -C "$TARGET_REPO" init >/dev/null || die "Failed to initialize repository: $TARGET_REPO"
+  REPO_DIR="$TARGET_REPO"
 fi
 
 verify_out="$tmp/bundle_verify.txt"
@@ -401,10 +468,26 @@ if [[ "$PRUNE_LOCAL_BRANCHES" == "1" && -s "$old_remote" ]]; then
   done < "$old_remote"
 fi
 
+if [[ "$MODE" == "bootstrap" ]]; then
+  checkout_branch=""
+  if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/main"; then
+    checkout_branch="main"
+  elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/master"; then
+    checkout_branch="master"
+  else
+    checkout_branch="${branches[0]}"
+  fi
+  git -C "$REPO_DIR" checkout -f "$checkout_branch" >/dev/null || die "Failed to checkout '$checkout_branch' in $REPO_DIR"
+fi
+
 if ! rm -f -- "$PACK_FILE"; then
   warn "Applied, but failed to delete pack: $PACK_FILE"
 else
   echo "INFO: deleted pack: $PACK_FILE"
 fi
 
-echo "OK: updated ${#branches[@]} branch(es) and tags (peer=$PEER)."
+if [[ "$MODE" == "bootstrap" ]]; then
+  echo "OK: created repository at $REPO_DIR and applied ${#branches[@]} branch(es) and tags (peer=$PEER)."
+else
+  echo "OK: updated ${#branches[@]} branch(es) and tags (peer=$PEER)."
+fi
