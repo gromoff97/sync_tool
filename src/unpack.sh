@@ -398,4 +398,10 @@ if [[ "$PRUNE_LOCAL_BRANCHES" == "1" && -s "$old_remote" ]]; then
   done < "$old_remote"
 fi
 
+if ! rm -f -- "$PACK_FILE"; then
+  warn "Applied, but failed to delete pack: $PACK_FILE"
+else
+  echo "INFO: deleted pack: $PACK_FILE"
+fi
+
 echo "OK: updated ${#branches[@]} branch(es) and tags (peer=$PEER)."
