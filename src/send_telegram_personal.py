@@ -110,7 +110,7 @@ def main() -> int:
         os.makedirs(session_dir, exist_ok=True)
 
     try:
-        from telethon.errors import SessionPasswordNeededError
+        from telethon.errors import FloodWaitError, SessionPasswordNeededError
         from telethon.sessions import StringSession
         from telethon.sync import TelegramClient
     except Exception:
@@ -127,8 +127,18 @@ def main() -> int:
     if args.session_string.strip():
         session_obj = StringSession(args.session_string.strip())
 
-    client = TelegramClient(session_obj, args.api_id, args.api_hash)
+    client = TelegramClient(
+        session_obj,
+        args.api_id,
+        args.api_hash,
+        request_retries=1,
+        connection_retries=1,
+        retry_delay=1,
+        timeout=20,
+        flood_sleep_threshold=0,
+    )
     try:
+        print("INFO: connecting to Telegram...", flush=True)
         client.connect()
         if not client.is_user_authorized():
             phone = args.phone.strip()
@@ -143,7 +153,9 @@ def main() -> int:
                 )
                 return 3
 
+            print("INFO: requesting login code from Telegram...", flush=True)
             sent = client.send_code_request(phone)
+            print("INFO: login code requested. Check Telegram messages.", flush=True)
 
             code = args.code.strip()
             if not code or looks_like_placeholder(code):
@@ -185,6 +197,13 @@ def main() -> int:
         print("INFO: uploading archive to Telegram...", flush=True)
         client.send_file(args.to, args.file, caption=args.caption or None)
         print("INFO: upload completed.", flush=True)
+    except FloodWaitError as exc:
+        seconds = getattr(exc, "seconds", None)
+        if seconds is None:
+            print("ERROR: Telegram rate limit (FloodWait). Try again later.", file=sys.stderr)
+        else:
+            print(f"ERROR: Telegram rate limit (FloodWait). Retry after {seconds} second(s).", file=sys.stderr)
+        return 1
     except Exception as exc:
         print(f"ERROR: Telegram personal upload failed: {exc}", file=sys.stderr)
         return 1
