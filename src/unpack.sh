@@ -419,6 +419,25 @@ if [[ "$MODE" == "existing" ]]; then
   done < "$incoming_refs"
 
   if [[ "$identical" == "1" ]]; then
+    incoming_heads="$tmp/incoming_heads.txt"
+    incoming_tags="$tmp/incoming_tags.txt"
+    local_heads="$tmp/local_heads.txt"
+    local_tags="$tmp/local_tags.txt"
+
+    awk '$2 ~ /^refs\/heads\// {sub("^refs/heads/","",$2); print $2}' "$incoming_refs" | sort -u > "$incoming_heads"
+    awk '$2 ~ /^refs\/tags\// {sub("^refs/tags/","",$2); print $2}' "$incoming_refs" | sort -u > "$incoming_tags"
+
+    git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2)' refs/heads | tr -d '\r' | sort -u > "$local_heads"
+    git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2)' refs/tags  | tr -d '\r' | sort -u > "$local_tags"
+
+    if ! cmp -s "$incoming_heads" "$local_heads"; then
+      identical="0"
+    elif ! cmp -s "$incoming_tags" "$local_tags"; then
+      identical="0"
+    fi
+  fi
+
+  if [[ "$identical" == "1" ]]; then
     info "Bundle already applied; repository matches pack."
     if ! rm -f -- "$PACK_FILE"; then
       warn "Matched, but failed to delete pack: $PACK_FILE"
@@ -434,7 +453,8 @@ awk '{ref=$2; sub("^refs/heads/","",ref); if(length(ref)>0) print ref}' \
   "$incoming_refs" | sort -u > "$incoming_list" || die "Failed to list heads from bundle"
 
 old_remote="$tmp/old_remote.tsv"
-git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=3)\t%(objectname)' "refs/remotes/$PEER/" \
+tab=$'\t'
+git -C "$REPO_DIR" for-each-ref --format="%(refname:strip=3)${tab}%(objectname)" "refs/remotes/$PEER/" \
   | tr -d '\r' > "$old_remote" || true
 
 fetch_err="$tmp/fetch_err.txt"
@@ -518,7 +538,11 @@ if [[ "$PRUNE_LOCAL_BRANCHES" == "1" && -s "$old_remote" ]]; then
     if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
       local_sha="$(git -C "$REPO_DIR" rev-parse "refs/heads/$b")"
       if [[ "$local_sha" == "$old_sha" ]]; then
-        git -C "$REPO_DIR" branch -D "$b" >/dev/null || warn "Failed to delete local branch: $b"
+        if git -C "$REPO_DIR" branch -D "$b" >/dev/null; then
+          info "Deleted local branch: $b"
+        else
+          warn "Failed to delete local branch: $b"
+        fi
       fi
     fi
   done < "$old_remote"
