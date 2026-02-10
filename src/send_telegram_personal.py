@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import re
 import sys
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Set, TypeVar
+from typing import Callable, Dict, List, Optional, Set, Tuple, TypeVar
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,6 +62,11 @@ def supports_color() -> bool:
 
 USE_COLOR = supports_color()
 T = TypeVar("T")
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+LIVE_STATUS_ENABLED = sys.stdout.isatty()
+_LIVE_STATUS_LOCK = threading.Lock()
+_LIVE_STATUS_ACTIVE = False
+_LIVE_STATUS_WIDTH = 0
 
 
 def _tag(name: str, code: str) -> str:
@@ -69,11 +75,47 @@ def _tag(name: str, code: str) -> str:
     return f"\033[{code}m[{name}]\033[0m"
 
 
+def _visible_len(text: str) -> int:
+    return len(ANSI_RE.sub("", text))
+
+
+def clear_live_status() -> None:
+    global _LIVE_STATUS_ACTIVE, _LIVE_STATUS_WIDTH
+    if not LIVE_STATUS_ENABLED:
+        return
+    with _LIVE_STATUS_LOCK:
+        if not _LIVE_STATUS_ACTIVE:
+            return
+        sys.stdout.write("\r" + (" " * _LIVE_STATUS_WIDTH) + "\r")
+        sys.stdout.flush()
+        _LIVE_STATUS_ACTIVE = False
+        _LIVE_STATUS_WIDTH = 0
+
+
+def update_live_status(msg: str) -> None:
+    global _LIVE_STATUS_ACTIVE, _LIVE_STATUS_WIDTH
+    if not LIVE_STATUS_ENABLED:
+        return
+
+    line = f"{_tag('PY', '34')} {msg}"
+    visible = _visible_len(line)
+    with _LIVE_STATUS_LOCK:
+        pad = ""
+        if _LIVE_STATUS_WIDTH > visible:
+            pad = " " * (_LIVE_STATUS_WIDTH - visible)
+        sys.stdout.write("\r" + line + pad)
+        sys.stdout.flush()
+        _LIVE_STATUS_ACTIVE = True
+        _LIVE_STATUS_WIDTH = visible
+
+
 def py(msg: str) -> None:
+    clear_live_status()
     print(f"{_tag('PY', '34')} {msg}", flush=True)
 
 
 def err(msg: str) -> None:
+    clear_live_status()
     if USE_COLOR:
         print(f"\033[31m[ERROR]\033[0m {msg}", file=sys.stderr, flush=True)
     else:
@@ -92,18 +134,22 @@ def format_bytes(value: int) -> str:
     return f"{size:.1f} {units[idx]}"
 
 
-def run_wait_step(step_label: str, action: Callable[[], T]) -> T:
+def run_wait_step(step_label: str, action: Callable[[], T], status_suffix: Optional[Callable[[], str]] = None) -> T:
     start_ts = time.monotonic()
     stop_event = threading.Event()
+    status_suffix = status_suffix or (lambda: "")
 
     def ticker() -> None:
         while not stop_event.wait(1.0):
             elapsed = int(time.monotonic() - start_ts)
-            py(f"{step_label}... {elapsed}s")
+            update_live_status(f"{step_label}... {elapsed}s{status_suffix()}")
 
-    py(f"{step_label}... 0s")
+    if LIVE_STATUS_ENABLED:
+        update_live_status(f"{step_label}... 0s")
+    else:
+        py(f"{step_label}...")
     worker = None
-    if sys.stdout.isatty():
+    if LIVE_STATUS_ENABLED:
         worker = threading.Thread(target=ticker, daemon=True)
         worker.start()
 
@@ -111,11 +157,17 @@ def run_wait_step(step_label: str, action: Callable[[], T]) -> T:
         result = action()
     except BaseException:
         elapsed = int(time.monotonic() - start_ts)
-        py(f"{step_label}... {elapsed}s")
+        if LIVE_STATUS_ENABLED:
+            update_live_status(f"{step_label}... {elapsed}s{status_suffix()}")
+            clear_live_status()
+        py(f"{step_label}... {elapsed}s{status_suffix()}")
         raise
     else:
         elapsed = int(time.monotonic() - start_ts)
-        py(f"{step_label}... {elapsed}s")
+        if LIVE_STATUS_ENABLED:
+            update_live_status(f"{step_label}... {elapsed}s{status_suffix()}")
+            clear_live_status()
+        py(f"{step_label}... {elapsed}s{status_suffix()}")
         return result
     finally:
         stop_event.set()
@@ -123,27 +175,25 @@ def run_wait_step(step_label: str, action: Callable[[], T]) -> T:
             worker.join(timeout=0.2)
 
 
-def make_upload_progress_logger(upload_start_ts: float) -> Callable[[int, int], None]:
-    last_bucket = -1
-    last_ts = 0.0
+def make_upload_progress_logger() -> Tuple[Callable[[int, int], None], Callable[[], str]]:
+    lock = threading.Lock()
+    sent_bytes = 0
+    total_bytes = 0
 
     def cb(sent: int, total: int) -> None:
-        nonlocal last_bucket, last_ts
-        if total <= 0:
-            return
+        nonlocal sent_bytes, total_bytes
+        with lock:
+            sent_bytes = max(0, sent)
+            total_bytes = max(0, total)
 
-        percent = int((sent * 100) / total)
-        bucket = percent // 5
-        now = time.monotonic()
-        if bucket == last_bucket and percent < 100 and (now - last_ts) < 2.0:
-            return
+    def suffix() -> str:
+        with lock:
+            if total_bytes <= 0:
+                return ""
+            percent = int((sent_bytes * 100) / total_bytes)
+            return f" | {percent}% ({format_bytes(sent_bytes)} / {format_bytes(total_bytes)})"
 
-        last_bucket = bucket
-        last_ts = now
-        elapsed = int(now - upload_start_ts)
-        py(f"Upload progress: {percent}% ({format_bytes(sent)} / {format_bytes(total)}) {elapsed}s")
-
-    return cb
+    return cb, suffix
 
 
 def looks_like_placeholder(value: str) -> bool:
@@ -371,7 +421,7 @@ def main() -> int:
                 remove_keys={"telegram_code", "telegram_password"},
             )
 
-        upload_start_ts = time.monotonic()
+        progress_cb, progress_suffix = make_upload_progress_logger()
         run_wait_step(
             f"Uploading archive to Telegram ({format_bytes(file_size)})",
             lambda: client.send_file(
@@ -379,8 +429,9 @@ def main() -> int:
                 args.file,
                 caption=args.caption or None,
                 parse_mode="md",
-                progress_callback=make_upload_progress_logger(upload_start_ts),
+                progress_callback=progress_cb,
             ),
+            status_suffix=progress_suffix,
         )
         py("Upload completed.")
     except KeyboardInterrupt:
