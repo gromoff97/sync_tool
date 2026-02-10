@@ -2,7 +2,7 @@
 set -euo pipefail
 
 die() { echo "[ERR] $*" >&2; exit 1; }
-warn() { echo "[APP] WARN: $*" >&2; }
+warn() { echo "[WRN] $*" >&2; }
 info() { echo "[APP] $*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
