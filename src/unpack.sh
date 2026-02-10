@@ -545,6 +545,7 @@ if [[ "${#branches[@]}" -eq 0 ]]; then
 fi
 
 current_branch="$(git -C "$REPO_DIR" symbolic-ref --short -q HEAD 2>/dev/null || true)"
+forced_updates=0
 
 if [[ "$FF_ONLY" == "1" ]]; then
   diverged=()
@@ -571,12 +572,14 @@ for b in "${branches[@]}"; do
       if [[ "$FF_ONLY" == "1" ]]; then
         git -C "$REPO_DIR" merge --ff-only "$PEER/$b" >/dev/null
       else
-        warn "--ff-only 0 -> resetting current branch '$b' to $PEER/$b (may discard local commits)"
+        warn "FORCING branch '$b' to $PEER/$b"
         git -C "$REPO_DIR" reset --hard "$remote_sha" >/dev/null
+        forced_updates=$((forced_updates + 1))
       fi
     else
       if [[ "$FF_ONLY" == "0" ]]; then
-        warn "--ff-only 0 -> forcing branch '$b' to $PEER/$b (may discard local commits)"
+        warn "FORCING branch '$b' to $PEER/$b"
+        forced_updates=$((forced_updates + 1))
       fi
       git -C "$REPO_DIR" update-ref "refs/heads/$b" "$remote_sha"
     fi
@@ -584,6 +587,10 @@ for b in "${branches[@]}"; do
     git -C "$REPO_DIR" branch "$b" "$remote_sha" >/dev/null
   fi
 done
+
+if [[ "$FF_ONLY" == "0" && "$forced_updates" -gt 0 ]]; then
+  warn "FORCED updates may discard local commits."
+fi
 
 if [[ "$PRUNE_LOCAL_BRANCHES" == "1" && -s "$old_remote" ]]; then
   while IFS=$'\t' read -r b old_sha; do
