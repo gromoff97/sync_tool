@@ -119,7 +119,7 @@ unpack.sh — apply latest .tgz pack from a directory, update ALL branches + tag
 Must be run inside the target git repository.
 
 Optional (defaults):
-  --pack-dir PATH             (default: syncpacks)
+  --pack-dir PATH             (default: ~/syncpacks)
   --pack-prefix PREFIX         (default: syncpack)
   --peer NAME                  (default: sync)
   --ff-only 0|1                (default: 1)
@@ -137,7 +137,7 @@ EOF
 # ---- parse args ----
 require_tools
 
-PACK_DIR="syncpacks"
+PACK_DIR="${HOME:+$HOME/syncpacks}"
 PACK_PREFIX="syncpack"
 
 # defaults per your request
@@ -173,6 +173,7 @@ done
 
 [[ -n "$PEER" ]] || die "--peer cannot be empty"
 [[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
+[[ -n "$PACK_DIR" ]] || die "HOME is not set; use --pack-dir PATH."
 [[ "$FF_ONLY" == "0" || "$FF_ONLY" == "1" ]] || die "--ff-only must be 0|1"
 [[ "$FORCE_TAGS" == "0" || "$FORCE_TAGS" == "1" ]] || die "--force-tags must be 0|1"
 [[ "$PRUNE_REMOTE_REFS" == "0" || "$PRUNE_REMOTE_REFS" == "1" ]] || die "--prune-remote-refs must be 0|1"
