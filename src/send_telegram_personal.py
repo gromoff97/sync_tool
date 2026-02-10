@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import asyncio
 import os
 import re
 import sys
@@ -67,6 +68,7 @@ LIVE_STATUS_ENABLED = sys.stdout.isatty()
 _LIVE_STATUS_LOCK = threading.Lock()
 _LIVE_STATUS_ACTIVE = False
 _LIVE_STATUS_WIDTH = 0
+UPLOAD_TIMEOUT_SECONDS = 20
 
 
 def _tag(name: str, code: str) -> str:
@@ -206,6 +208,28 @@ def make_upload_progress_logger() -> Tuple[Callable[[int, int], None], Callable[
             return f" | {render_progress_bar(progress_percent)} {progress_percent}% ({sent_text} / {total_text})"
 
     return cb, suffix
+
+
+def send_file_with_timeout(
+    client: object,
+    to_peer: str,
+    file_path: str,
+    caption: str,
+    progress_callback: Callable[[int, int], None],
+    timeout_seconds: int,
+) -> object:
+    async def _upload() -> object:
+        return await client.send_file(
+            to_peer,
+            file_path,
+            caption=caption or None,
+            parse_mode="md",
+            progress_callback=progress_callback,
+        )
+
+    return client.loop.run_until_complete(
+        asyncio.wait_for(_upload(), timeout=timeout_seconds)
+    )
 
 
 def looks_like_placeholder(value: str) -> bool:
@@ -379,9 +403,10 @@ def main() -> int:
         session_obj,
         api_id,
         api_hash,
-        request_retries=1,
-        connection_retries=1,
-        retry_delay=1,
+        request_retries=0,
+        connection_retries=0,
+        retry_delay=0,
+        auto_reconnect=False,
         timeout=20,
         flood_sleep_threshold=0,
     )
@@ -435,12 +460,13 @@ def main() -> int:
         progress_cb, progress_suffix = make_upload_progress_logger()
         run_wait_step(
             "Uploading archive to Telegram",
-            lambda: client.send_file(
-                to_peer,
-                args.file,
-                caption=args.caption or None,
-                parse_mode="md",
+            lambda: send_file_with_timeout(
+                client=client,
+                to_peer=to_peer,
+                file_path=args.file,
+                caption=args.caption,
                 progress_callback=progress_cb,
+                timeout_seconds=UPLOAD_TIMEOUT_SECONDS,
             ),
             status_suffix=progress_suffix,
         )
@@ -448,6 +474,9 @@ def main() -> int:
     except KeyboardInterrupt:
         err("Interrupted by user.")
         return 130
+    except asyncio.TimeoutError:
+        err(f"Telegram upload timed out after {UPLOAD_TIMEOUT_SECONDS} second(s).")
+        return 1
     except FloodWaitError as exc:
         seconds = getattr(exc, "seconds", None)
         if seconds is None:
