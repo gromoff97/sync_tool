@@ -10,7 +10,6 @@ require_tools() {
   have tar  || die "tar not found"
   have awk  || die "awk not found"
   have sort || die "sort not found"
-  have stat || die "stat not found"
 }
 
 mktemp_dir() {
@@ -50,22 +49,15 @@ sha256_text() {
 
 gitpath() { git -C "$1" rev-parse --git-path "$2"; }
 
-REPO_EMPTY="0"
-REPO_NEW="0"
-
 ensure_repo_ok_and_clean() {
   local repo="$1"
-
-  if [[ ! -d "$repo" ]]; then
-    mkdir -p "$repo" || die "Cannot create --repo-dir: $repo"
-    git -C "$repo" init >/dev/null || die "Failed to init git repo: $repo"
-    REPO_NEW="1"
-  fi
 
   git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "Not a git repository: $repo"
   local is_bare
   is_bare="$(git -C "$repo" rev-parse --is-bare-repository 2>/dev/null || echo true)"
   [[ "$is_bare" == "false" ]] || die "Repository is bare (not supported): $repo"
+
+  git -C "$repo" rev-parse --verify HEAD >/dev/null 2>&1 || die "HEAD is invalid/missing (empty repo?): $repo"
 
   local p
   p="$(gitpath "$repo" MERGE_HEAD)";        [[ ! -f "$p" ]] || die "Merge in progress. Finish/abort."
@@ -79,10 +71,6 @@ ensure_repo_ok_and_clean() {
   local st
   st="$(git -C "$repo" status --porcelain)"
   [[ -z "$st" ]] || die "Repo has uncommitted/untracked changes. Clean it first."
-
-  if ! git -C "$repo" rev-parse --verify HEAD >/dev/null 2>&1; then
-    REPO_EMPTY="1"
-  fi
 }
 
 read_manifest_value() {
@@ -99,40 +87,41 @@ repo_roots_fingerprint() {
 }
 
 pick_latest_pack() {
-  local dir="$1" glob="$2"
+  local dir="$1" prefix="$2" project="$3"
   [[ -d "$dir" ]] || die "--pack-dir is not a directory: $dir"
 
   shopt -s nullglob
-  local files=( "$dir"/$glob )
+  local files=( "$dir"/"${prefix}_${project}_"*.tgz )
   shopt -u nullglob
 
-  [[ "${#files[@]}" -gt 0 ]] || die "No packs found in $dir matching glob: $glob"
+  [[ "${#files[@]}" -gt 0 ]] || die "No packs found in $dir for project '$project' and prefix '$prefix'"
 
-  local best="" best_mtime=-1 f m
+  local best="" best_ts="" f base ts
   for f in "${files[@]}"; do
-    m="$(stat -c %Y "$f" 2>/dev/null || echo -1)"
-    [[ "$m" =~ ^-?[0-9]+$ ]] || m=-1
-    if (( m > best_mtime )); then
-      best_mtime="$m"
-      best="$f"
+    base="$(basename "$f")"
+    ts="${base#${prefix}_${project}_}"
+    ts="${ts%.tgz}"
+    if [[ "$ts" =~ ^[0-9]{8}_[0-9]{6}$ ]]; then
+      if [[ -z "$best_ts" || "$ts" > "$best_ts" ]]; then
+        best_ts="$ts"
+        best="$f"
+      fi
     fi
   done
 
-  [[ -n "$best" ]] || die "Failed to pick latest pack (stat issue?)"
+  [[ -n "$best" ]] || die "No packs with valid timestamp in name: ${prefix}_${project}_YYYYMMDD_HHMMSS.tgz"
   printf '%s' "$best"
 }
 
 usage() {
   cat >&2 <<'EOF'
 unpack.sh — apply latest .tgz pack from a directory, update ALL branches + tags
-
-Required:
-  --repo-dir PATH             (created with git init if missing)
+Must be run inside the target git repository.
 
 Optional (defaults):
   --pack-dir PATH             (default: syncpacks)
+  --pack-prefix PREFIX         (default: syncpack)
   --peer NAME                  (default: sync)
-  --pack-glob GLOB             (default: syncpack_*.tgz)
   --ff-only 0|1                (default: 1)
   --force-tags 0|1             (default: 0)
   --prune-remote-refs 0|1      (default: 1)
@@ -140,7 +129,7 @@ Optional (defaults):
   --help
 
 Example:
-  ./unpack.sh --repo-dir /c/Work/project --pack-dir /c/Work/in
+  ./unpack.sh --pack-dir /c/Work/in
 EOF
   exit 2
 }
@@ -148,12 +137,11 @@ EOF
 # ---- parse args ----
 require_tools
 
-REPO_DIR=""
 PACK_DIR="syncpacks"
+PACK_PREFIX="syncpack"
 
 # defaults per your request
 PEER="sync"
-PACK_GLOB="syncpack_*.tgz"
 FF_ONLY="1"
 FORCE_TAGS="0"
 PRUNE_REMOTE_REFS="1"
@@ -161,15 +149,13 @@ PRUNE_LOCAL_BRANCHES="0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --repo-dir)               REPO_DIR="${2:-}"; shift 2;;
-    --repo-dir=*)             REPO_DIR="${1#*=}"; shift 1;;
     --pack-dir)               PACK_DIR="${2:-}"; shift 2;;
     --pack-dir=*)             PACK_DIR="${1#*=}"; shift 1;;
+    --pack-prefix)            PACK_PREFIX="${2:-}"; shift 2;;
+    --pack-prefix=*)          PACK_PREFIX="${1#*=}"; shift 1;;
 
     --peer)                   PEER="${2:-}"; shift 2;;
     --peer=*)                 PEER="${1#*=}"; shift 1;;
-    --pack-glob)              PACK_GLOB="${2:-}"; shift 2;;
-    --pack-glob=*)            PACK_GLOB="${1#*=}"; shift 1;;
 
     --ff-only)                FF_ONLY="${2:-}"; shift 2;;
     --ff-only=*)              FF_ONLY="${1#*=}"; shift 1;;
@@ -185,18 +171,21 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$REPO_DIR" ]] || usage
-
 [[ -n "$PEER" ]] || die "--peer cannot be empty"
-[[ -n "$PACK_GLOB" ]] || die "--pack-glob cannot be empty"
+[[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
 [[ "$FF_ONLY" == "0" || "$FF_ONLY" == "1" ]] || die "--ff-only must be 0|1"
 [[ "$FORCE_TAGS" == "0" || "$FORCE_TAGS" == "1" ]] || die "--force-tags must be 0|1"
 [[ "$PRUNE_REMOTE_REFS" == "0" || "$PRUNE_REMOTE_REFS" == "1" ]] || die "--prune-remote-refs must be 0|1"
 [[ "$PRUNE_LOCAL_BRANCHES" == "0" || "$PRUNE_LOCAL_BRANCHES" == "1" ]] || die "--prune-local-branches must be 0|1"
 
+REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[[ -n "$REPO_DIR" ]] || die "Run unpack.sh inside a git repository."
+
+PROJECT_NAME="$(basename "$REPO_DIR")"
+
 ensure_repo_ok_and_clean "$REPO_DIR"
 
-PACK_FILE="$(pick_latest_pack "$PACK_DIR" "$PACK_GLOB")"
+PACK_FILE="$(pick_latest_pack "$PACK_DIR" "$PACK_PREFIX" "$PROJECT_NAME")"
 echo "INFO: picked latest pack: $PACK_FILE"
 echo "INFO: peer namespace: refs/remotes/$PEER/*"
 
@@ -224,11 +213,9 @@ expected_repo_roots_sha="$(read_manifest_value "$manifest" repo_roots_sha256 || 
 if [[ -z "${expected_repo_roots_sha:-}" ]]; then
   die "Pack missing repo_roots_sha256. Recreate pack with updated pack.sh."
 fi
-if [[ "$REPO_EMPTY" == "0" ]]; then
-  local_repo_roots_sha="$(repo_roots_fingerprint "$REPO_DIR")"
-  if [[ "$local_repo_roots_sha" != "$expected_repo_roots_sha" ]]; then
-    die "Repository identity mismatch (pack=$expected_repo_roots_sha, local=$local_repo_roots_sha)."
-  fi
+local_repo_roots_sha="$(repo_roots_fingerprint "$REPO_DIR")"
+if [[ "$local_repo_roots_sha" != "$expected_repo_roots_sha" ]]; then
+  die "Repository identity mismatch (pack=$expected_repo_roots_sha, local=$local_repo_roots_sha)."
 fi
 
 expected_bundle_sha="$(read_manifest_value "$manifest" bundle_sha256 || true)"
@@ -264,13 +251,6 @@ if [[ "$FORCE_TAGS" == "1" ]]; then
   git -C "$REPO_DIR" fetch --force "$bundle" "refs/tags/*:refs/tags/*" >/dev/null 2>/dev/null || true
 else
   git -C "$REPO_DIR" fetch "$bundle" "refs/tags/*:refs/tags/*" >/dev/null 2>/dev/null || true
-fi
-
-if [[ "$REPO_EMPTY" == "1" ]]; then
-  local_repo_roots_sha="$(repo_roots_fingerprint "$REPO_DIR")"
-  if [[ "$local_repo_roots_sha" != "$expected_repo_roots_sha" ]]; then
-    die "Repository identity mismatch (pack=$expected_repo_roots_sha, local=$local_repo_roots_sha)."
-  fi
 fi
 
 if [[ "$PRUNE_REMOTE_REFS" == "1" ]]; then

@@ -79,7 +79,7 @@ repo_roots_fingerprint() {
 
 ensure_repo_ok_and_clean() {
   local repo="$1"
-  [[ -d "$repo" ]] || die "--repo-dir is not a directory: $repo"
+  [[ -d "$repo" ]] || die "Repository path is not a directory: $repo"
 
   git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "Not a git repository: $repo"
   local is_bare
@@ -109,10 +109,7 @@ ensure_repo_ok_and_clean() {
 usage() {
   cat >&2 <<'EOF'
 pack.sh — create FULL git bundle pack (all branches + tags) into a .tgz
-File name: <prefix>_<timestamp>.tgz (no side/hostname in filename)
-
-Required:
-  --repo-dir PATH
+File name: <prefix>_<project>_<timestamp>.tgz
 
 Optional (defaults):
   --output-dir PATH          (default: syncpacks)
@@ -121,7 +118,7 @@ Optional (defaults):
   --help
 
 Example:
-  ./pack.sh --repo-dir /c/Work/project --output-dir /c/Work/out
+  ./pack.sh --output-dir /c/Work/out
 EOF
   exit 2
 }
@@ -129,15 +126,12 @@ EOF
 # ---- parse args ----
 require_tools
 
-REPO_DIR=""
 OUTPUT_DIR="syncpacks"
 PACK_PREFIX="syncpack"
 MACHINE_NAME=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --repo-dir)        REPO_DIR="${2:-}"; shift 2;;
-    --repo-dir=*)      REPO_DIR="${1#*=}"; shift 1;;
     --output-dir)      OUTPUT_DIR="${2:-}"; shift 2;;
     --output-dir=*)    OUTPUT_DIR="${1#*=}"; shift 1;;
     --pack-prefix)     PACK_PREFIX="${2:-}"; shift 2;;
@@ -149,7 +143,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$REPO_DIR" ]] || usage
 [[ -n "$OUTPUT_DIR" ]] || usage
 [[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
 
@@ -157,6 +150,12 @@ if [[ -z "$MACHINE_NAME" ]]; then
   MACHINE_NAME="$(detect_machine_name)"
 fi
 MACHINE_NAME="$(sanitize_for_manifest "$MACHINE_NAME")"
+
+REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[[ -n "$REPO_DIR" ]] || die "Run pack.sh inside a git repository."
+
+PROJECT_NAME="$(basename "$REPO_DIR")"
+PROJECT_NAME="$(sanitize_for_manifest "$PROJECT_NAME")"
 
 mkdir -p "$OUTPUT_DIR" || die "Cannot create --output-dir: $OUTPUT_DIR"
 ensure_repo_ok_and_clean "$REPO_DIR"
@@ -183,6 +182,7 @@ bundle_sha="$(sha256_file "$bundle")"
 {
   echo -e "key\tvalue"
   echo -e "pack_prefix\t$PACK_PREFIX"
+  echo -e "project_name\t$PROJECT_NAME"
   echo -e "machine_name\t$MACHINE_NAME"
   echo -e "created_at\t$(date -Iseconds 2>/dev/null || date)"
   echo -e "git_version\t$(git --version)"
@@ -194,7 +194,7 @@ bundle_sha="$(sha256_file "$bundle")"
 } > "$manifest"
 
 ts="$(date +%Y%m%d_%H%M%S 2>/dev/null || date +%Y%m%d_%H%M%S)"
-final="${PACK_PREFIX}_${ts}.tgz"
+final="${PACK_PREFIX}_${PROJECT_NAME}_${ts}.tgz"
 
 tmp_out="$OUTPUT_DIR/.${final}.tmp.$$"
 rm -f "$tmp_out" 2>/dev/null || true
