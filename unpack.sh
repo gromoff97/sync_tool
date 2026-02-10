@@ -119,7 +119,7 @@ unpack.sh — apply latest .tgz pack from a directory, update ALL branches + tag
 Must be run inside the target git repository.
 
 Optional (defaults):
-  --pack-dir PATH             (default: current working directory)
+  --pack-dir PATH             (default: <repo>/syncpacks)
   --pack-prefix PREFIX         (default: syncpack)
   --peer NAME                  (default: sync)
   --ff-only 0|1                (default: 1)
@@ -184,7 +184,7 @@ REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 PROJECT_NAME="$(basename "$REPO_DIR")"
 
 if [[ -z "$PACK_DIR" ]]; then
-  PACK_DIR="$PWD"
+  PACK_DIR="$REPO_DIR/syncpacks"
 fi
 
 ensure_repo_ok_and_clean "$REPO_DIR"
