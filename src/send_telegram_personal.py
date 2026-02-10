@@ -26,6 +26,9 @@ def parse_args() -> argparse.Namespace:
 def supports_color() -> bool:
     if os.getenv("NO_COLOR"):
         return False
+    force = os.getenv("FORCE_COLOR")
+    if force and force != "0":
+        return True
     if not sys.stdout.isatty():
         return False
 

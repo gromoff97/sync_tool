@@ -293,7 +293,7 @@ send_to_telegram_personal() {
   if [[ -z "$C_RESET" ]]; then
     NO_COLOR=1 "${cmd[@]}" || die "Telegram personal upload failed."
   else
-    "${cmd[@]}" || die "Telegram personal upload failed."
+    FORCE_COLOR=1 "${cmd[@]}" || die "Telegram personal upload failed."
   fi
 }
 
