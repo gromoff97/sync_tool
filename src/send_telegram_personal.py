@@ -74,11 +74,29 @@ def update_conf_file(path: str, updates: Optional[Dict[str, str]] = None, remove
 
 
 def prompt_input(prompt: str, secret: bool = False) -> str:
-    if not sys.stdin.isatty():
-        return ""
-    if secret:
-        return getpass.getpass(prompt).strip()
-    return input(prompt).strip()
+    # First try normal stdin/stderr (works in most terminals).
+    try:
+        if secret:
+            return getpass.getpass(prompt).strip()
+        return input(prompt).strip()
+    except (EOFError, OSError):
+        pass
+
+    # Fallback for environments where Python's stdin is detached from TTY.
+    # Git Bash + Windows Python may need explicit console device handles.
+    for in_name, out_name in (("/dev/tty", "/dev/tty"), ("CONIN$", "CONOUT$")):
+        try:
+            with open(in_name, "r", encoding="utf-8", errors="ignore") as tty_in, open(
+                out_name, "w", encoding="utf-8", errors="ignore"
+            ) as tty_out:
+                tty_out.write(prompt)
+                tty_out.flush()
+                line = tty_in.readline()
+                return line.strip()
+        except OSError:
+            continue
+
+    return ""
 
 
 def main() -> int:
