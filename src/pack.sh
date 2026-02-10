@@ -67,6 +67,67 @@ sanitize_for_manifest() {
   printf '%s' "$s"
 }
 
+trim_ws() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+strip_quotes() {
+  local s="$1"
+  if [[ ${#s} -ge 2 ]]; then
+    if [[ "${s:0:1}" == '"' && "${s: -1}" == '"' ]]; then
+      s="${s:1:${#s}-2}"
+    elif [[ "${s:0:1}" == "'" && "${s: -1}" == "'" ]]; then
+      s="${s:1:${#s}-2}"
+    fi
+  fi
+  printf '%s' "$s"
+}
+
+expand_user_path() {
+  local p="$1"
+  case "$p" in
+    "~")
+      [[ -n "${HOME:-}" ]] || die "HOME is not set; cannot expand '~' in config."
+      printf '%s' "$HOME"
+      ;;
+    "~/"*)
+      [[ -n "${HOME:-}" ]] || die "HOME is not set; cannot expand '~/' in config."
+      printf '%s' "$HOME/${p#~/}"
+      ;;
+    *)
+      printf '%s' "$p"
+      ;;
+  esac
+}
+
+load_config_overrides() {
+  local cfg="$1"
+  [[ -f "$cfg" ]] || return 0
+
+  local raw line key value
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    raw="${raw%$'\r'}"
+    line="${raw%%#*}"
+    line="$(trim_ws "$line")"
+    [[ -n "$line" ]] || continue
+    [[ "$line" == *=* ]] || die "Invalid config line in $cfg: $raw"
+
+    key="$(trim_ws "${line%%=*}")"
+    value="$(trim_ws "${line#*=}")"
+    value="$(strip_quotes "$value")"
+
+    case "$key" in
+      output_dir|OUTPUT_DIR)       OUTPUT_DIR="$(expand_user_path "$value")" ;;
+      pack_prefix|PACK_PREFIX)     PACK_PREFIX="$value" ;;
+      machine_name|MACHINE_NAME)   MACHINE_NAME="$value" ;;
+      *) ;;
+    esac
+  done < "$cfg"
+}
+
 gitpath() { git -C "$1" rev-parse --git-path "$2"; }
 
 repo_roots_fingerprint() {
@@ -102,7 +163,7 @@ ensure_repo_ok_and_clean() {
   p="$(gitpath "$repo" index.lock)";        [[ ! -f "$p" ]] || die "index.lock exists. Another git process running?"
 
   local st
-  st="$(git -C "$repo" status --porcelain)"
+  st="$(git -C "$repo" status --porcelain | awk 'substr($0,4)!="unpack.conf"')"
   [[ -z "$st" ]] || die "Repo has uncommitted/untracked changes. Commit/stash first."
 }
 
@@ -116,6 +177,9 @@ Optional (defaults):
   --pack-prefix PREFIX       (default: syncpack)
   --machine-name NAME        (default: auto-detected; written to manifest only)
   --help
+
+Config:
+  <repo>/unpack.conf (if present) overrides CLI options.
 
 Example:
   ./pack --output-dir /c/Work/out
@@ -143,6 +207,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[[ -n "$REPO_DIR" ]] || die "Run pack.sh inside a git repository."
+
+CONFIG_FILE="$REPO_DIR/unpack.conf"
+load_config_overrides "$CONFIG_FILE"
+
 [[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
 [[ -n "$OUTPUT_DIR" ]] || die "HOME is not set; use --output-dir PATH."
 
@@ -150,9 +220,6 @@ if [[ -z "$MACHINE_NAME" ]]; then
   MACHINE_NAME="$(detect_machine_name)"
 fi
 MACHINE_NAME="$(sanitize_for_manifest "$MACHINE_NAME")"
-
-REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-[[ -n "$REPO_DIR" ]] || die "Run pack.sh inside a git repository."
 
 PROJECT_NAME="$(basename "$REPO_DIR")"
 PROJECT_NAME="$(sanitize_for_manifest "$PROJECT_NAME")"

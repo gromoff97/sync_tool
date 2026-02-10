@@ -47,6 +47,71 @@ sha256_text() {
   fi
 }
 
+trim_ws() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+strip_quotes() {
+  local s="$1"
+  if [[ ${#s} -ge 2 ]]; then
+    if [[ "${s:0:1}" == '"' && "${s: -1}" == '"' ]]; then
+      s="${s:1:${#s}-2}"
+    elif [[ "${s:0:1}" == "'" && "${s: -1}" == "'" ]]; then
+      s="${s:1:${#s}-2}"
+    fi
+  fi
+  printf '%s' "$s"
+}
+
+expand_user_path() {
+  local p="$1"
+  case "$p" in
+    "~")
+      [[ -n "${HOME:-}" ]] || die "HOME is not set; cannot expand '~' in config."
+      printf '%s' "$HOME"
+      ;;
+    "~/"*)
+      [[ -n "${HOME:-}" ]] || die "HOME is not set; cannot expand '~/' in config."
+      printf '%s' "$HOME/${p#~/}"
+      ;;
+    *)
+      printf '%s' "$p"
+      ;;
+  esac
+}
+
+load_config_overrides() {
+  local cfg="$1"
+  [[ -f "$cfg" ]] || return 0
+
+  local raw line key value
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    raw="${raw%$'\r'}"
+    line="${raw%%#*}"
+    line="$(trim_ws "$line")"
+    [[ -n "$line" ]] || continue
+    [[ "$line" == *=* ]] || die "Invalid config line in $cfg: $raw"
+
+    key="$(trim_ws "${line%%=*}")"
+    value="$(trim_ws "${line#*=}")"
+    value="$(strip_quotes "$value")"
+
+    case "$key" in
+      pack_dir|PACK_DIR)                         PACK_DIR="$(expand_user_path "$value")" ;;
+      pack_prefix|PACK_PREFIX)                   PACK_PREFIX="$value" ;;
+      peer|PEER)                                 PEER="$value" ;;
+      ff_only|FF_ONLY)                           FF_ONLY="$value" ;;
+      force_tags|FORCE_TAGS)                     FORCE_TAGS="$value" ;;
+      prune_remote_refs|PRUNE_REMOTE_REFS)       PRUNE_REMOTE_REFS="$value" ;;
+      prune_local_branches|PRUNE_LOCAL_BRANCHES) PRUNE_LOCAL_BRANCHES="$value" ;;
+      *) ;;
+    esac
+  done < "$cfg"
+}
+
 gitpath() { git -C "$1" rev-parse --git-path "$2"; }
 
 ensure_repo_ok_and_clean() {
@@ -69,7 +134,7 @@ ensure_repo_ok_and_clean() {
   p="$(gitpath "$repo" index.lock)";        [[ ! -f "$p" ]] || die "index.lock exists. Another git process running?"
 
   local st
-  st="$(git -C "$repo" status --porcelain)"
+  st="$(git -C "$repo" status --porcelain | awk 'substr($0,4)!="unpack.conf"')"
   [[ -z "$st" ]] || die "Repo has uncommitted/untracked changes. Clean it first."
 }
 
@@ -128,6 +193,9 @@ Optional (defaults):
   --prune-local-branches 0|1   (default: 0)
   --help
 
+Config:
+  <repo>/unpack.conf (if present) overrides CLI options.
+
 Example:
   ./unpack --pack-dir /c/Work/in
 EOF
@@ -171,6 +239,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[[ -n "$REPO_DIR" ]] || die "Run unpack.sh inside a git repository."
+
+CONFIG_FILE="$REPO_DIR/unpack.conf"
+load_config_overrides "$CONFIG_FILE"
+
 [[ -n "$PEER" ]] || die "--peer cannot be empty"
 [[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
 [[ -n "$PACK_DIR" ]] || die "HOME is not set; use --pack-dir PATH."
@@ -178,9 +252,6 @@ done
 [[ "$FORCE_TAGS" == "0" || "$FORCE_TAGS" == "1" ]] || die "--force-tags must be 0|1"
 [[ "$PRUNE_REMOTE_REFS" == "0" || "$PRUNE_REMOTE_REFS" == "1" ]] || die "--prune-remote-refs must be 0|1"
 [[ "$PRUNE_LOCAL_BRANCHES" == "0" || "$PRUNE_LOCAL_BRANCHES" == "1" ]] || die "--prune-local-branches must be 0|1"
-
-REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-[[ -n "$REPO_DIR" ]] || die "Run unpack.sh inside a git repository."
 
 PROJECT_NAME="$(basename "$REPO_DIR")"
 
