@@ -136,7 +136,12 @@ load_telegram_config() {
   TG_API_HASH=""
   TG_TO=""
   TG_SESSION="${HOME:+$HOME/.sync_tool_telegram}"
+  TG_SESSION_STRING=""
+  TG_PHONE=""
+  TG_CODE=""
+  TG_PASSWORD=""
   TG_CAPTION=""
+  TG_PYTHON_MIN="3.8"
 
   local raw line key value
   while IFS= read -r raw || [[ -n "$raw" ]]; do
@@ -155,7 +160,12 @@ load_telegram_config() {
       telegram_api_hash|TELEGRAM_API_HASH|api_hash|API_HASH) TG_API_HASH="$value" ;;
       telegram_to|TELEGRAM_TO|to|TO|telegram_peer|TELEGRAM_PEER|peer|PEER) TG_TO="$value" ;;
       telegram_session|TELEGRAM_SESSION|session|SESSION) TG_SESSION="$(expand_user_path "$value")" ;;
+      telegram_session_string|TELEGRAM_SESSION_STRING|session_string|SESSION_STRING) TG_SESSION_STRING="$value" ;;
+      telegram_phone|TELEGRAM_PHONE|phone|PHONE) TG_PHONE="$value" ;;
+      telegram_code|TELEGRAM_CODE|code|CODE) TG_CODE="$value" ;;
+      telegram_password|TELEGRAM_PASSWORD|password|PASSWORD) TG_PASSWORD="$value" ;;
       telegram_caption|TELEGRAM_CAPTION|caption|CAPTION) TG_CAPTION="$value" ;;
+      telegram_python_min|TELEGRAM_PYTHON_MIN|python_min|PYTHON_MIN) TG_PYTHON_MIN="$value" ;;
       *) ;;
     esac
   done < "$cfg"
@@ -164,19 +174,50 @@ load_telegram_config() {
   [[ -n "$TG_API_HASH" ]] || die "telegram_api_hash is required in $cfg"
   [[ -n "$TG_TO" ]] || die "telegram_to is required in $cfg"
   [[ "$TG_API_ID" =~ ^[0-9]+$ ]] || die "telegram_api_id must be an integer in $cfg"
-  [[ -n "$TG_SESSION" ]] || die "telegram_session resolved to empty value in $cfg"
+  [[ -n "$TG_SESSION" || -n "$TG_SESSION_STRING" ]] || die "Set telegram_session or telegram_session_string in $cfg"
+  [[ "$TG_PYTHON_MIN" =~ ^[0-9]+\.[0-9]+$ ]] || die "telegram_python_min must be MAJOR.MINOR in $cfg"
+}
+
+python_version_at_least() {
+  local py_bin="$1" min_major="$2" min_minor="$3"
+  "$py_bin" - "$min_major" "$min_minor" >/dev/null 2>&1 <<'PY'
+import sys
+min_major = int(sys.argv[1])
+min_minor = int(sys.argv[2])
+sys.exit(0 if (sys.version_info.major, sys.version_info.minor) >= (min_major, min_minor) else 1)
+PY
+}
+
+python_module_available() {
+  local py_bin="$1" module="$2"
+  "$py_bin" - "$module" >/dev/null 2>&1 <<'PY'
+import importlib
+import sys
+importlib.import_module(sys.argv[1])
+PY
+}
+
+select_python_for_telegram() {
+  local min_ver="$1"
+  local min_major="${min_ver%%.*}"
+  local min_minor="${min_ver##*.}"
+  local py_bin
+
+  for py_bin in python3 python; do
+    if have "$py_bin" && python_version_at_least "$py_bin" "$min_major" "$min_minor"; then
+      printf '%s' "$py_bin"
+      return 0
+    fi
+  done
+
+  die "Python >= $min_ver not found (required for Telegram upload)."
 }
 
 send_to_telegram_personal() {
   local file="$1" caption="$2"
-  local py_bin=""
-  if have python3; then
-    py_bin="python3"
-  elif have python; then
-    py_bin="python"
-  else
-    die "python3/python not found (required for Telegram personal upload)"
-  fi
+  local py_bin
+  py_bin="$(select_python_for_telegram "$TG_PYTHON_MIN")"
+  python_module_available "$py_bin" "telethon" || die "Python module 'telethon' is not installed for $py_bin. Install it before using -s."
 
   local script_dir script_path
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -191,6 +232,18 @@ send_to_telegram_personal() {
     --to "$TG_TO"
     --file "$file"
   )
+  if [[ -n "$TG_SESSION_STRING" ]]; then
+    cmd+=(--session-string "$TG_SESSION_STRING")
+  fi
+  if [[ -n "$TG_PHONE" ]]; then
+    cmd+=(--phone "$TG_PHONE")
+  fi
+  if [[ -n "$TG_CODE" ]]; then
+    cmd+=(--code "$TG_CODE")
+  fi
+  if [[ -n "$TG_PASSWORD" ]]; then
+    cmd+=(--password "$TG_PASSWORD")
+  fi
   if [[ -n "$caption" ]]; then
     cmd+=(--caption "$caption")
   fi
@@ -233,7 +286,7 @@ ensure_repo_ok_and_clean() {
   p="$(gitpath "$repo" index.lock)";        [[ ! -f "$p" ]] || die "index.lock exists. Another git process running?"
 
   local st
-  st="$(git -C "$repo" status --porcelain | awk 'substr($0,4)!="unpack.conf" && substr($0,4)!="telegram.conf"')"
+  st="$(git -C "$repo" status --porcelain)"
   [[ -z "$st" ]] || die "Repo has uncommitted/untracked changes. Commit/stash first."
 }
 
@@ -246,14 +299,19 @@ Optional (defaults):
   --output-dir PATH          (default: ~/syncpacks)
   --pack-prefix PREFIX       (default: syncpack)
   --machine-name NAME        (default: auto-detected; written to manifest only)
-  -s                         send archive from personal account using <repo>/telegram.conf
+  -s                         send archive from personal account using <tool_dir>/conf/telegram.conf
   --help
 
 Config:
-  <repo>/unpack.conf   (if present) overrides pack options above.
-  <repo>/telegram.conf used only with -s; required keys:
+  <tool_dir>/conf/pack.conf (if present) overrides pack options above.
+  <tool_dir>/conf/telegram.conf used only with -s; required keys:
                        telegram_api_id, telegram_api_hash, telegram_to
-                       optional keys: telegram_session, telegram_caption
+                       optional keys:
+                       telegram_session or telegram_session_string
+                       telegram_phone, telegram_code, telegram_password
+                       telegram_caption, telegram_python_min
+                       default caption (if not set): From <machine_name>
+                       (default python minimum: 3.8)
 
 Example:
   ./pack -s
@@ -291,7 +349,10 @@ done
 REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$REPO_DIR" ]] || die "Run pack.sh inside a git repository."
 
-CONFIG_FILE="$REPO_DIR/unpack.conf"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOOL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+CONFIG_FILE="$TOOL_DIR/conf/pack.conf"
 load_config_overrides "$CONFIG_FILE"
 
 [[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
@@ -359,10 +420,10 @@ tar -tzf "$tmp_out" | tr -d '\r' | awk 'BEGIN{b=0;m=0;bad=0}
 mv -f "$tmp_out" "$final_path" || die "Cannot move archive to output dir"
 
 if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
-  TELEGRAM_CONFIG_FILE="$REPO_DIR/telegram.conf"
+  TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
   load_telegram_config "$TELEGRAM_CONFIG_FILE"
   if [[ -z "$TG_CAPTION" ]]; then
-    TG_CAPTION="$final"
+    TG_CAPTION="From <${MACHINE_NAME}>"
   fi
 
   send_to_telegram_personal "$final_path" "$TG_CAPTION"

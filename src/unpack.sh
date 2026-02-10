@@ -134,7 +134,7 @@ ensure_repo_ok_and_clean() {
   p="$(gitpath "$repo" index.lock)";        [[ ! -f "$p" ]] || die "index.lock exists. Another git process running?"
 
   local st
-  st="$(git -C "$repo" status --porcelain | awk 'substr($0,4)!="unpack.conf" && substr($0,4)!="telegram.conf"')"
+  st="$(git -C "$repo" status --porcelain)"
   [[ -z "$st" ]] || die "Repo has uncommitted/untracked changes. Clean it first."
 }
 
@@ -194,7 +194,7 @@ Optional (defaults):
   --help
 
 Config:
-  <repo>/unpack.conf (if present) overrides CLI options.
+  <tool_dir>/conf/unpack.conf (if present) overrides CLI options.
 
 Example:
   ./unpack --pack-dir /c/Work/in
@@ -242,7 +242,10 @@ done
 REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$REPO_DIR" ]] || die "Run unpack.sh inside a git repository."
 
-CONFIG_FILE="$REPO_DIR/unpack.conf"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOOL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+CONFIG_FILE="$TOOL_DIR/conf/unpack.conf"
 load_config_overrides "$CONFIG_FILE"
 
 [[ -n "$PEER" ]] || die "--peer cannot be empty"
