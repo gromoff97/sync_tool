@@ -5,26 +5,27 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   C_RESET=$'\033[0m'
-  C_BOLD=$'\033[1m'
   C_RED=$'\033[31m'
   C_YELLOW=$'\033[33m'
-  C_BLUE=$'\033[34m'
   C_CYAN=$'\033[36m'
   C_GREEN=$'\033[32m'
+  C_BLUE=$'\033[34m'
+  C_MAGENTA=$'\033[35m'
 else
   C_RESET=''
-  C_BOLD=''
   C_RED=''
   C_YELLOW=''
-  C_BLUE=''
   C_CYAN=''
   C_GREEN=''
+  C_BLUE=''
+  C_MAGENTA=''
 fi
 
-log_info()  { printf '%b[INFO]%b %s\n' "$C_CYAN" "$C_RESET" "$*"; }
-log_step()  { printf '%b[STEP]%b %s\n' "$C_BLUE" "$C_RESET" "$*"; }
-log_warn()  { printf '%b[WARN]%b %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
-log_ok()    { printf '%b[OK]%b   %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+log_pack()  { printf '%b[PACK]%b %s\n' "$C_CYAN" "$C_RESET" "$*"; }
+log_git()   { printf '%b[GIT]%b  %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
+log_tar()   { printf '%b[TAR]%b  %s\n' "$C_MAGENTA" "$C_RESET" "$*"; }
+log_py()    { printf '%b[PY]%b   %s\n' "$C_BLUE" "$C_RESET" "$*"; }
+log_ok()    { printf '%b[PACK]%b %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 die()       { printf '%b[ERROR]%b %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
 
 require_tools() {
@@ -416,9 +417,9 @@ PROJECT_NAME="$(sanitize_for_manifest "$PROJECT_NAME")"
 
 mkdir -p "$OUTPUT_DIR" || die "Cannot create --output-dir: $OUTPUT_DIR"
 ensure_repo_ok_and_clean "$REPO_DIR"
-log_info "Repository: $REPO_DIR"
-log_info "Project: $PROJECT_NAME"
-log_info "Output directory: $OUTPUT_DIR"
+log_pack "Repository: $REPO_DIR"
+log_pack "Project: $PROJECT_NAME"
+log_pack "Output directory: $OUTPUT_DIR"
 
 repo_roots_sha="$(repo_roots_fingerprint "$REPO_DIR")"
 
@@ -429,8 +430,12 @@ trap cleanup EXIT
 bundle="$tmp/bundle.bundle"
 manifest="$tmp/manifest.tsv"
 
-log_step "Creating full git bundle (branches + tags)..."
-git -C "$REPO_DIR" bundle create "$bundle" --branches --tags >/dev/null || die "git bundle create failed"
+log_git "Creating full git bundle (branches + tags)..."
+create_out="$tmp/git_bundle_create.txt"
+if ! git -C "$REPO_DIR" bundle create "$bundle" --branches --tags >"$create_out" 2>&1; then
+  cat "$create_out" >&2
+  die "git bundle create failed"
+fi
 
 verify_out="$tmp/bundle_verify.txt"
 if ! git -C "$REPO_DIR" bundle verify "$bundle" >"$verify_out" 2>&1; then
@@ -461,7 +466,7 @@ final_path="$OUTPUT_DIR/$final"
 tmp_out="$OUTPUT_DIR/.${final}.tmp.$$"
 rm -f "$tmp_out" 2>/dev/null || true
 
-log_step "Building archive: $final"
+log_tar "Building archive: $final"
 tar -czf "$tmp_out" -C "$tmp" "bundle.bundle" "manifest.tsv" || die "tar failed"
 
 tar -tzf "$tmp_out" | tr -d '\r' | awk 'BEGIN{b=0;m=0;bad=0}
@@ -479,7 +484,7 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
     TG_CAPTION="From **$(escape_md "$MACHINE_NAME")**"
   fi
 
-  log_step "Sending archive to Telegram..."
+  log_py "Sending archive to Telegram..."
   send_to_telegram_personal "$final_path" "$TG_CAPTION" "$TELEGRAM_CONFIG_FILE"
   rm -f -- "$final_path" || die "Uploaded to Telegram, but failed to delete local pack: $final_path"
   log_ok "Uploaded to Telegram and removed local file: $final_path"

@@ -57,16 +57,8 @@ def _tag(name: str, code: str) -> str:
     return f"\033[{code}m[{name}]\033[0m"
 
 
-def info(msg: str) -> None:
-    print(f"{_tag('INFO', '36')} {msg}", flush=True)
-
-
-def step(msg: str) -> None:
-    print(f"{_tag('STEP', '34')} {msg}", flush=True)
-
-
-def ok(msg: str) -> None:
-    print(f"{_tag('OK', '32')} {msg}", flush=True)
+def py(msg: str) -> None:
+    print(f"{_tag('PY', '34')} {msg}", flush=True)
 
 
 def err(msg: str) -> None:
@@ -131,14 +123,15 @@ def update_conf_file(path: str, updates: Optional[Dict[str, str]] = None, remove
 
 def prompt_input(prompt: str, secret: bool = False) -> str:
     del secret  # Plain input is the most reliable across Git Bash + Windows Python.
+    prompt_text = f"{_tag('PY', '34')} {prompt}"
 
     # Primary path: explicit prompt + stdin read.
     try:
         if sys.stdout.isatty():
-            sys.stdout.write(prompt)
+            sys.stdout.write(prompt_text)
             sys.stdout.flush()
         else:
-            sys.stderr.write(prompt)
+            sys.stderr.write(prompt_text)
             sys.stderr.flush()
         line = sys.stdin.readline()
         if line:
@@ -152,7 +145,7 @@ def prompt_input(prompt: str, secret: bool = False) -> str:
             with open(in_name, "r", encoding="utf-8", errors="ignore") as tty_in, open(
                 out_name, "w", encoding="utf-8", errors="ignore"
             ) as tty_out:
-                tty_out.write(prompt)
+                tty_out.write(prompt_text)
                 tty_out.flush()
                 line = tty_in.readline()
                 if line:
@@ -162,7 +155,7 @@ def prompt_input(prompt: str, secret: bool = False) -> str:
 
     # Last-resort path.
     try:
-        return input(prompt).strip()
+        return input(prompt_text).strip()
     except (EOFError, OSError):
         pass
 
@@ -203,7 +196,7 @@ def main() -> int:
         return 2
 
     try:
-        step("Collecting Telegram connection settings...")
+        py("Collecting Telegram connection settings...")
         api_id_raw = resolve_required("telegram_api_id", args.api_id, "Enter telegram_api_id: ")
         if not api_id_raw.isdigit():
             err("telegram_api_id must be an integer.")
@@ -246,7 +239,7 @@ def main() -> int:
         flood_sleep_threshold=0,
     )
     try:
-        step("Connecting to Telegram...")
+        py("Connecting to Telegram...")
         client.connect()
 
         if not client.is_user_authorized():
@@ -256,9 +249,9 @@ def main() -> int:
                 err(str(exc))
                 return 3
 
-            step("Requesting login code from Telegram...")
+            py("Requesting login code from Telegram...")
             sent = client.send_code_request(phone)
-            info("Login code requested. Check Telegram messages.")
+            py("Login code requested. Check Telegram messages.")
 
             try:
                 code = resolve_required("telegram_code", args.code, "Enter Telegram login code: ")
@@ -267,7 +260,7 @@ def main() -> int:
                 return 3
 
             try:
-                step("Verifying login code...")
+                py("Verifying login code...")
                 client.sign_in(
                     phone=phone,
                     code=code,
@@ -284,7 +277,7 @@ def main() -> int:
                 except ValueError as exc:
                     err(str(exc))
                     return 3
-                step("Verifying 2FA password...")
+                py("Verifying 2FA password...")
                 client.sign_in(password=password)
 
             update_conf_file(
@@ -293,14 +286,14 @@ def main() -> int:
                 remove_keys={"telegram_code", "telegram_password"},
             )
 
-        step("Uploading archive to Telegram...")
+        py("Uploading archive to Telegram...")
         client.send_file(
             to_peer,
             args.file,
             caption=args.caption or None,
             parse_mode="md",
         )
-        ok("Upload completed.")
+        py("Upload completed.")
     except FloodWaitError as exc:
         seconds = getattr(exc, "seconds", None)
         if seconds is None:
