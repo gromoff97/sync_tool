@@ -69,7 +69,7 @@ LIVE_STATUS_ENABLED = sys.stdout.isatty()
 _LIVE_STATUS_LOCK = threading.Lock()
 _LIVE_STATUS_ACTIVE = False
 _LIVE_STATUS_WIDTH = 0
-TAG_COL_WIDTH = 7
+TAG_COL_WIDTH = 5
 UPLOAD_TIMEOUT_SECONDS = 20
 
 
@@ -107,7 +107,7 @@ def update_live_status(msg: str) -> None:
     if not LIVE_STATUS_ENABLED:
         return
 
-    line = f"{_prefix('PY', '34')}{msg}"
+    line = f"{_prefix('PYT', '34')}{msg}"
     visible = _visible_len(line)
     with _LIVE_STATUS_LOCK:
         pad = ""
@@ -121,12 +121,12 @@ def update_live_status(msg: str) -> None:
 
 def py(msg: str) -> None:
     clear_live_status()
-    print(f"{_prefix('PY', '34')}{msg}", flush=True)
+    print(f"{_prefix('PYT', '34')}{msg}", flush=True)
 
 
 def err(msg: str) -> None:
     clear_live_status()
-    print(f"{_prefix('ERROR', '31')}{msg}", file=sys.stderr, flush=True)
+    print(f"{_prefix('ERR', '31')}{msg}", file=sys.stderr, flush=True)
 
 
 def format_bytes(value: int) -> str:
@@ -292,7 +292,7 @@ def update_conf_file(path: str, updates: Optional[Dict[str, str]] = None, remove
 
 def prompt_input(prompt: str, secret: bool = False) -> str:
     del secret  # Plain input is the most reliable across Git Bash + Windows Python.
-    prompt_text = f"{_prefix('PY', '34')}{prompt}"
+    prompt_text = f"{_prefix('PYT', '34')}{prompt}"
 
     # Primary path: explicit prompt + stdin read.
     try:
