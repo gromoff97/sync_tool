@@ -429,9 +429,16 @@ repo_roots_sha="$(repo_roots_fingerprint "$REPO_DIR")"
 
 tmp="$(mktemp_dir)"
 cleanup() {
+  local exit_code=$?
   rm -rf "$tmp" 2>/dev/null || true
   if [[ "${DELETE_FINAL_ON_EXIT:-0}" == "1" && -n "${final_path:-}" && -f "$final_path" ]]; then
-    rm -f -- "$final_path" 2>/dev/null || true
+    if rm -f -- "$final_path" 2>/dev/null; then
+      if [[ "$exit_code" -ne 0 ]]; then
+        log_pack "Removed local file after failure: $final_path"
+      fi
+    else
+      printf '%b[ERROR]%b Failed to delete local pack after failure: %s\n' "$C_RED" "$C_RESET" "$final_path" >&2
+    fi
   fi
 }
 trap cleanup EXIT
