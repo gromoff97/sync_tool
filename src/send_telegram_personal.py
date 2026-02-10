@@ -107,7 +107,21 @@ def update_conf_file(path: str, updates: Optional[Dict[str, str]] = None, remove
 def prompt_input(prompt: str, secret: bool = False) -> str:
     del secret  # Plain input is the most reliable across Git Bash + Windows Python.
 
-    # Prefer explicit TTY handles so prompts are always visible in Git Bash.
+    # Primary path: explicit prompt + stdin read.
+    try:
+        if sys.stdout.isatty():
+            sys.stdout.write(prompt)
+            sys.stdout.flush()
+        else:
+            sys.stderr.write(prompt)
+            sys.stderr.flush()
+        line = sys.stdin.readline()
+        if line:
+            return line.strip()
+    except OSError:
+        pass
+
+    # Fallback for terminals with detached stdin handles.
     for in_name, out_name in (("/dev/tty", "/dev/tty"), ("CONIN$", "CONOUT$")):
         try:
             with open(in_name, "r", encoding="utf-8", errors="ignore") as tty_in, open(
@@ -116,17 +130,15 @@ def prompt_input(prompt: str, secret: bool = False) -> str:
                 tty_out.write(prompt)
                 tty_out.flush()
                 line = tty_in.readline()
-                return line.strip()
+                if line:
+                    return line.strip()
         except OSError:
             continue
 
-    # Fallback to regular stdin/stdout if explicit tty is unavailable.
+    # Last-resort path.
     try:
-        sys.stdout.write(prompt)
-        sys.stdout.flush()
-        line = sys.stdin.readline()
-        return line.strip()
-    except OSError:
+        return input(prompt).strip()
+    except (EOFError, OSError):
         pass
 
     return ""
@@ -166,6 +178,7 @@ def main() -> int:
         return 2
 
     try:
+        step("Collecting Telegram connection settings...")
         api_id_raw = resolve_required("telegram_api_id", args.api_id, "Enter telegram_api_id: ")
         if not api_id_raw.isdigit():
             err("telegram_api_id must be an integer.")

@@ -258,7 +258,14 @@ send_to_telegram_personal() {
   [[ -f "$script_path" ]] || die "Telegram sender script not found: $script_path"
 
   local -a cmd
-  cmd=("$py_bin" "$script_path"
+  local -a py_cmd
+  py_cmd=("$py_bin" "-u")
+  # Git Bash + Windows console Python can lose interactive prompts without winpty.
+  if have winpty && [[ -t 0 && -t 1 ]]; then
+    py_cmd=("winpty" "${py_cmd[@]}")
+  fi
+
+  cmd=("${py_cmd[@]}" "$script_path"
     --api-id "$TG_API_ID"
     --api-hash "$TG_API_HASH"
     --session "$TG_SESSION"
