@@ -436,9 +436,8 @@ PROJECT_NAME="$(sanitize_for_manifest "$PROJECT_NAME")"
 
 mkdir -p "$OUTPUT_DIR" || die "Cannot create --output-dir: $OUTPUT_DIR"
 ensure_repo_ok_and_clean "$REPO_DIR"
-log_pack "Repository: $REPO_DIR"
-log_pack "Project: $PROJECT_NAME"
-log_pack "Output directory: $OUTPUT_DIR"
+log_pack "Repo: $REPO_DIR | Project: $PROJECT_NAME"
+log_pack "Out: $OUTPUT_DIR"
 
 repo_roots_sha="$(repo_roots_fingerprint "$REPO_DIR")"
 
@@ -461,7 +460,7 @@ trap cleanup EXIT
 bundle="$tmp/bundle.bundle"
 manifest="$tmp/manifest.tsv"
 
-log_git "Creating full git bundle (branches + tags)..."
+log_git "Bundle (branches+tags)..."
 create_out="$tmp/git_bundle_create.txt"
 if ! git -C "$REPO_DIR" bundle create "$bundle" --branches --tags >"$create_out" 2>&1; then
   cat "$create_out" >&2
@@ -497,7 +496,7 @@ final_path="$OUTPUT_DIR/$final"
 tmp_out="$OUTPUT_DIR/.${final}.tmp.$$"
 rm -f "$tmp_out" 2>/dev/null || true
 
-log_tar "Building archive: $final"
+log_tar "Archive: $final"
 tar -czf "$tmp_out" -C "$tmp" "bundle.bundle" "manifest.tsv" || die "tar failed"
 
 tar -tzf "$tmp_out" | tr -d '\r' | awk 'BEGIN{b=0;m=0;bad=0}
@@ -515,12 +514,12 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
     TG_CAPTION="From **$(escape_md "$MACHINE_NAME")**"
   fi
 
-  log_pack "Starting Telegram sender script..."
+  log_pack "Telegram send..."
   DELETE_FINAL_ON_EXIT="1"
   send_to_telegram_personal "$final_path" "$TG_CAPTION" "$TELEGRAM_CONFIG_FILE"
   rm -f -- "$final_path" || die "Uploaded to Telegram, but failed to delete local pack: $final_path"
   DELETE_FINAL_ON_EXIT="0"
-  log_ok "Removed local file: $final_path"
+  log_ok "Removed: $final_path"
 else
-  log_ok "Pack created: $final_path"
+  log_ok "Pack: $final_path"
 fi

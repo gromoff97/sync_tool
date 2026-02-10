@@ -401,7 +401,7 @@ def main() -> int:
     telethon_logger.setLevel(logging.CRITICAL + 1)
 
     try:
-        py("Collecting Telegram connection settings...")
+    py("Telegram settings...")
         api_id_raw = resolve_required("telegram_api_id", args.api_id, "Enter telegram_api_id: ")
         if not api_id_raw.isdigit():
             err("telegram_api_id must be an integer.")
@@ -445,7 +445,7 @@ def main() -> int:
         flood_sleep_threshold=0,
     )
     try:
-        run_wait_step("Connecting to Telegram", client.connect)
+        run_wait_step("Connect Telegram", client.connect)
 
         if not client.is_user_authorized():
             try:
@@ -454,8 +454,8 @@ def main() -> int:
                 err(str(exc))
                 return 3
 
-            sent = run_wait_step("Requesting login code from Telegram", lambda: client.send_code_request(phone))
-            py("Login code requested. Check Telegram messages.")
+            sent = run_wait_step("Request login code", lambda: client.send_code_request(phone))
+            py("Login code sent. Check Telegram.")
 
             try:
                 code = resolve_required("telegram_code", args.code, "Enter Telegram login code: ")
@@ -465,7 +465,7 @@ def main() -> int:
 
             try:
                 run_wait_step(
-                    "Verifying login code",
+                    "Verify login code",
                     lambda: client.sign_in(
                         phone=phone,
                         code=code,
@@ -483,7 +483,7 @@ def main() -> int:
                 except ValueError as exc:
                     err(str(exc))
                     return 3
-                run_wait_step("Verifying 2FA password", lambda: client.sign_in(password=password))
+                run_wait_step("Verify 2FA", lambda: client.sign_in(password=password))
 
             update_conf_file(
                 args.config_file,
@@ -493,7 +493,7 @@ def main() -> int:
 
         progress_cb, progress_suffix = make_upload_progress_logger()
         run_wait_step(
-            "Uploading archive to Telegram",
+            "Upload to Telegram",
             lambda: send_file_with_timeout(
                 client=client,
                 to_peer=to_peer,
@@ -504,7 +504,7 @@ def main() -> int:
             ),
             status_suffix=progress_suffix,
         )
-        py("Upload completed.")
+        py("Upload done.")
     except KeyboardInterrupt:
         err("Interrupted by user.")
         return 130

@@ -141,7 +141,7 @@ cleanup_peer_refs() {
     for r in "${refs[@]}"; do
       git -C "$REPO_DIR" update-ref -d "$r" >/dev/null || warn "Failed to delete peer ref: $r"
     done
-    info "Removed peer refs: ${#refs[@]}"
+    info "Peer refs removed: ${#refs[@]}"
   fi
 
   local fetch_head
@@ -354,11 +354,11 @@ if [[ "$MODE" == "bootstrap" ]]; then
   [[ ! -e "$TARGET_REPO" ]] || die "Target path already exists: $TARGET_REPO"
 fi
 
-info "Picked latest pack: $PACK_FILE"
+info "Pack: $PACK_FILE"
 info "Project: $PROJECT_NAME"
 info "Peer: $PEER"
 if [[ "$MODE" == "bootstrap" ]]; then
-  info "Target repo will be created at: $TARGET_REPO"
+  info "Create repo: $TARGET_REPO"
 fi
 
 tmp="$(mktemp_dir)"
@@ -466,12 +466,12 @@ if [[ "$MODE" == "existing" ]]; then
   fi
 
   if [[ "$identical" == "1" ]]; then
-    info "Bundle already applied; repository matches pack."
+    info "No changes: repo matches pack."
     cleanup_peer_refs
     if ! rm -f -- "$PACK_FILE"; then
       warn "Matched, but failed to delete pack: $PACK_FILE"
     else
-      info "Deleted pack: $PACK_FILE"
+      info "Pack deleted: $PACK_FILE"
     fi
     exit 0
   fi
@@ -530,12 +530,12 @@ if [[ "$PRUNE_REMOTE_REFS" == "1" ]]; then
       fi
     fi
   done < <(git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=3)' "refs/remotes/$PEER/" | tr -d '\r' | sort)
-  [[ "$removed_remote" -gt 0 ]] && info "Pruned remote refs: $removed_remote"
+  [[ "$removed_remote" -gt 0 ]] && info "Remote refs pruned: $removed_remote"
 fi
 
 mapfile -t branches < <(git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=3)' "refs/remotes/$PEER/" | tr -d '\r' | sort)
 if [[ "${#branches[@]}" -eq 0 ]]; then
-  warn "No branches under refs/remotes/$PEER/* after fetch. Done."
+  warn "No branches after fetch. Done."
   exit 0
 fi
 
@@ -623,11 +623,11 @@ cleanup_peer_refs
 if ! rm -f -- "$PACK_FILE"; then
   warn "Applied, but failed to delete pack: $PACK_FILE"
 else
-  info "Deleted pack: $PACK_FILE"
+  info "Pack deleted: $PACK_FILE"
 fi
 
 if [[ "$MODE" == "bootstrap" ]]; then
-  info "Created repository at $REPO_DIR and applied ${#branches[@]} branch(es) and tags (peer=$PEER)."
+  info "Created repo: $REPO_DIR | branches: ${#branches[@]} | peer: $PEER"
 else
-  info "Updated ${#branches[@]} branch(es) and tags (peer=$PEER)."
+  info "Updated branches: ${#branches[@]} | peer: $PEER"
 fi
