@@ -292,9 +292,9 @@ send_to_telegram_personal() {
   fi
 
   if [[ -z "$C_RESET" ]]; then
-    NO_COLOR=1 "${cmd[@]}" || die "Telegram personal upload failed."
+    NO_COLOR=1 "${cmd[@]}"
   else
-    FORCE_COLOR=1 "${cmd[@]}" || die "Telegram personal upload failed."
+    FORCE_COLOR=1 "${cmd[@]}"
   fi
 }
 
@@ -382,6 +382,8 @@ TG_API_HASH=""
 TG_TO=""
 TG_SESSION=""
 TG_CAPTION=""
+final_path=""
+DELETE_FINAL_ON_EXIT="0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -426,7 +428,12 @@ log_pack "Output directory: $OUTPUT_DIR"
 repo_roots_sha="$(repo_roots_fingerprint "$REPO_DIR")"
 
 tmp="$(mktemp_dir)"
-cleanup() { rm -rf "$tmp" 2>/dev/null || true; }
+cleanup() {
+  rm -rf "$tmp" 2>/dev/null || true
+  if [[ "${DELETE_FINAL_ON_EXIT:-0}" == "1" && -n "${final_path:-}" && -f "$final_path" ]]; then
+    rm -f -- "$final_path" 2>/dev/null || true
+  fi
+}
 trap cleanup EXIT
 
 bundle="$tmp/bundle.bundle"
@@ -487,8 +494,10 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
   fi
 
   log_py "Sending archive to Telegram..."
+  DELETE_FINAL_ON_EXIT="1"
   send_to_telegram_personal "$final_path" "$TG_CAPTION" "$TELEGRAM_CONFIG_FILE"
   rm -f -- "$final_path" || die "Uploaded to Telegram, but failed to delete local pack: $final_path"
+  DELETE_FINAL_ON_EXIT="0"
   log_ok "Removed local file: $final_path"
 else
   log_ok "Pack created: $final_path"

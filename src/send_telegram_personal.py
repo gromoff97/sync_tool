@@ -122,16 +122,10 @@ def err(msg: str) -> None:
         print(f"[ERROR] {msg}", file=sys.stderr, flush=True)
 
 
-def format_bytes(value: int) -> str:
-    units = ("B", "KB", "MB", "GB", "TB")
-    size = float(max(value, 0))
-    idx = 0
-    while size >= 1024.0 and idx < len(units) - 1:
-        size /= 1024.0
-        idx += 1
-    if idx == 0:
-        return f"{int(size)} {units[idx]}"
-    return f"{size:.1f} {units[idx]}"
+def render_progress_bar(percent: int, width: int = 24) -> str:
+    p = max(0, min(100, percent))
+    filled = int((p * width) / 100)
+    return "[" + ("#" * filled) + ("-" * (width - filled)) + "]"
 
 
 def run_wait_step(step_label: str, action: Callable[[], T], status_suffix: Optional[Callable[[], str]] = None) -> T:
@@ -177,21 +171,21 @@ def run_wait_step(step_label: str, action: Callable[[], T], status_suffix: Optio
 
 def make_upload_progress_logger() -> Tuple[Callable[[int, int], None], Callable[[], str]]:
     lock = threading.Lock()
-    sent_bytes = 0
-    total_bytes = 0
+    progress_percent = -1
 
     def cb(sent: int, total: int) -> None:
-        nonlocal sent_bytes, total_bytes
+        nonlocal progress_percent
+        if total <= 0:
+            return
+        percent = int((max(0, sent) * 100) / total)
         with lock:
-            sent_bytes = max(0, sent)
-            total_bytes = max(0, total)
+            progress_percent = max(0, min(100, percent))
 
     def suffix() -> str:
         with lock:
-            if total_bytes <= 0:
+            if progress_percent < 0:
                 return ""
-            percent = int((sent_bytes * 100) / total_bytes)
-            return f" | {percent}% ({format_bytes(sent_bytes)} / {format_bytes(total_bytes)})"
+            return f" | {render_progress_bar(progress_percent)} {progress_percent}%"
 
     return cb, suffix
 
@@ -305,7 +299,6 @@ def main() -> int:
     if not os.path.isfile(args.file):
         err(f"file not found: {args.file}")
         return 1
-    file_size = os.path.getsize(args.file)
 
     try:
         from colorama import just_fix_windows_console
@@ -423,7 +416,7 @@ def main() -> int:
 
         progress_cb, progress_suffix = make_upload_progress_logger()
         run_wait_step(
-            f"Uploading archive to Telegram ({format_bytes(file_size)})",
+            "Uploading archive to Telegram",
             lambda: client.send_file(
                 to_peer,
                 args.file,
