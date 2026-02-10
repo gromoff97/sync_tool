@@ -23,7 +23,32 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-USE_COLOR = bool(sys.stdout.isatty() and not os.getenv("NO_COLOR"))
+def supports_color() -> bool:
+    if os.getenv("NO_COLOR"):
+        return False
+    if not sys.stdout.isatty():
+        return False
+
+    term = (os.getenv("TERM") or "").lower()
+    if term in ("", "dumb"):
+        return False
+
+    if os.name != "nt":
+        return True
+
+    # Windows terminals with ANSI support.
+    if os.getenv("WT_SESSION"):
+        return True
+    if os.getenv("ANSICON"):
+        return True
+    if (os.getenv("ConEmuANSI") or "").upper() == "ON":
+        return True
+    if (os.getenv("TERM_PROGRAM") or "").lower() in ("vscode", "mintty"):
+        return True
+    return False
+
+
+USE_COLOR = supports_color()
 
 
 def _tag(name: str, code: str) -> str:

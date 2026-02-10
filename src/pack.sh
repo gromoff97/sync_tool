@@ -289,7 +289,11 @@ send_to_telegram_personal() {
     cmd+=(--caption "$caption")
   fi
 
-  "${cmd[@]}" || die "Telegram personal upload failed."
+  if [[ -z "$C_RESET" ]]; then
+    NO_COLOR=1 "${cmd[@]}" || die "Telegram personal upload failed."
+  else
+    "${cmd[@]}" || die "Telegram personal upload failed."
+  fi
 }
 
 gitpath() { git -C "$1" rev-parse --git-path "$2"; }
