@@ -243,7 +243,8 @@ git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=3)\t%(objectname)' "re
   | tr -d '\r' > "$old_remote" || true
 
 fetch_err="$tmp/fetch_err.txt"
-if ! git -C "$REPO_DIR" fetch "$bundle" "refs/heads/*:refs/remotes/$PEER/*" >/dev/null 2>"$fetch_err"; then
+# Always force-update peer namespace from bundle. Local branch safety is handled separately by --ff-only.
+if ! git -C "$REPO_DIR" fetch --force "$bundle" "refs/heads/*:refs/remotes/$PEER/*" >/dev/null 2>"$fetch_err"; then
   cat "$fetch_err" >&2
   die "Fetch failed."
 fi
