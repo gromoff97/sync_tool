@@ -23,6 +23,9 @@ require_tools() {
   have tar  || die "tar not found"
   have awk  || die "awk not found"
   have sort || die "sort not found"
+  have tr   || die "tr not found"
+  have grep || die "grep not found"
+  have cmp  || die "cmp not found"
 }
 
 mktemp_dir() {
@@ -468,6 +471,28 @@ if [[ "$FORCE_TAGS" == "1" ]]; then
   git -C "$REPO_DIR" fetch --force "$bundle" "refs/tags/*:refs/tags/*" >/dev/null 2>/dev/null || true
 else
   git -C "$REPO_DIR" fetch "$bundle" "refs/tags/*:refs/tags/*" >/dev/null 2>/dev/null || true
+fi
+
+if [[ "$FORCE_TAGS" == "0" ]]; then
+  tag_conflicts=()
+  while read -r sha ref; do
+    [[ -n "$sha" && -n "$ref" ]] || continue
+    [[ "$ref" == refs/tags/* ]] || continue
+    tag="${ref#refs/tags/}"
+    if git -C "$REPO_DIR" show-ref --verify --quiet "refs/tags/$tag"; then
+      local_sha="$(git -C "$REPO_DIR" rev-parse "refs/tags/$tag")"
+      if [[ "$local_sha" != "$sha" ]]; then
+        tag_conflicts+=("$tag")
+      fi
+    fi
+  done < "$incoming_refs"
+
+  if [[ "${#tag_conflicts[@]}" -gt 0 ]]; then
+    warn "Tag conflicts (local tags differ from pack; not updated without --force-tags 1):"
+    for tag in "${tag_conflicts[@]}"; do
+      warn "  - $tag"
+    done
+  fi
 fi
 
 if [[ "$PRUNE_REMOTE_REFS" == "1" ]]; then

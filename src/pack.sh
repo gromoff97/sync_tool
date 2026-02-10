@@ -45,6 +45,7 @@ require_tools() {
   have tar || die "tar not found"
   have awk || die "awk not found"
   have sort || die "sort not found"
+  have tr  || die "tr not found"
   have wc  || die "wc not found"
 }
 
