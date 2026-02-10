@@ -2,8 +2,9 @@
 import argparse
 import os
 import sys
+import threading
 import time
-from typing import Callable, Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set, TypeVar
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,6 +60,7 @@ def supports_color() -> bool:
 
 
 USE_COLOR = supports_color()
+T = TypeVar("T")
 
 
 def _tag(name: str, code: str) -> str:
@@ -90,7 +92,38 @@ def format_bytes(value: int) -> str:
     return f"{size:.1f} {units[idx]}"
 
 
-def make_upload_progress_logger() -> Callable[[int, int], None]:
+def run_wait_step(step_label: str, action: Callable[[], T]) -> T:
+    start_ts = time.monotonic()
+    stop_event = threading.Event()
+
+    def ticker() -> None:
+        while not stop_event.wait(1.0):
+            elapsed = int(time.monotonic() - start_ts)
+            py(f"{step_label}... {elapsed}s")
+
+    py(f"{step_label}... 0s")
+    worker = None
+    if sys.stdout.isatty():
+        worker = threading.Thread(target=ticker, daemon=True)
+        worker.start()
+
+    try:
+        result = action()
+    except BaseException:
+        elapsed = int(time.monotonic() - start_ts)
+        py(f"{step_label}... {elapsed}s")
+        raise
+    else:
+        elapsed = int(time.monotonic() - start_ts)
+        py(f"{step_label}... {elapsed}s")
+        return result
+    finally:
+        stop_event.set()
+        if worker is not None:
+            worker.join(timeout=0.2)
+
+
+def make_upload_progress_logger(upload_start_ts: float) -> Callable[[int, int], None]:
     last_bucket = -1
     last_ts = 0.0
 
@@ -107,7 +140,8 @@ def make_upload_progress_logger() -> Callable[[int, int], None]:
 
         last_bucket = bucket
         last_ts = now
-        py(f"Upload progress: {percent}% ({format_bytes(sent)} / {format_bytes(total)})")
+        elapsed = int(now - upload_start_ts)
+        py(f"Upload progress: {percent}% ({format_bytes(sent)} / {format_bytes(total)}) {elapsed}s")
 
     return cb
 
@@ -291,8 +325,7 @@ def main() -> int:
         flood_sleep_threshold=0,
     )
     try:
-        py("Connecting to Telegram...")
-        client.connect()
+        run_wait_step("Connecting to Telegram", client.connect)
 
         if not client.is_user_authorized():
             try:
@@ -301,8 +334,7 @@ def main() -> int:
                 err(str(exc))
                 return 3
 
-            py("Requesting login code from Telegram...")
-            sent = client.send_code_request(phone)
+            sent = run_wait_step("Requesting login code from Telegram", lambda: client.send_code_request(phone))
             py("Login code requested. Check Telegram messages.")
 
             try:
@@ -312,11 +344,13 @@ def main() -> int:
                 return 3
 
             try:
-                py("Verifying login code...")
-                client.sign_in(
-                    phone=phone,
-                    code=code,
-                    phone_code_hash=sent.phone_code_hash,
+                run_wait_step(
+                    "Verifying login code",
+                    lambda: client.sign_in(
+                        phone=phone,
+                        code=code,
+                        phone_code_hash=sent.phone_code_hash,
+                    ),
                 )
             except SessionPasswordNeededError:
                 try:
@@ -329,8 +363,7 @@ def main() -> int:
                 except ValueError as exc:
                     err(str(exc))
                     return 3
-                py("Verifying 2FA password...")
-                client.sign_in(password=password)
+                run_wait_step("Verifying 2FA password", lambda: client.sign_in(password=password))
 
             update_conf_file(
                 args.config_file,
@@ -338,13 +371,16 @@ def main() -> int:
                 remove_keys={"telegram_code", "telegram_password"},
             )
 
-        py(f"Uploading archive to Telegram ({format_bytes(file_size)})...")
-        client.send_file(
-            to_peer,
-            args.file,
-            caption=args.caption or None,
-            parse_mode="md",
-            progress_callback=make_upload_progress_logger(),
+        upload_start_ts = time.monotonic()
+        run_wait_step(
+            f"Uploading archive to Telegram ({format_bytes(file_size)})",
+            lambda: client.send_file(
+                to_peer,
+                args.file,
+                caption=args.caption or None,
+                parse_mode="md",
+                progress_callback=make_upload_progress_logger(upload_start_ts),
+            ),
         )
         py("Upload completed.")
     except KeyboardInterrupt:
