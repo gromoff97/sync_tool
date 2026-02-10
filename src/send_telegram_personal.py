@@ -62,7 +62,26 @@ def supports_color() -> bool:
     return False
 
 
+def supports_256_color() -> bool:
+    if os.getenv("NO_COLOR"):
+        return False
+    force = os.getenv("FORCE_256_COLOR")
+    if force and force != "0":
+        return True
+    term = (os.getenv("TERM") or "").lower()
+    if "256color" in term:
+        return True
+    if os.getenv("COLORTERM"):
+        return True
+    if os.getenv("WT_SESSION") or os.getenv("MSYSTEM") or os.getenv("ANSICON"):
+        return True
+    if (os.getenv("ConEmuANSI") or "").upper() == "ON":
+        return True
+    return False
+
+
 USE_COLOR = supports_color()
+USE_256_COLOR = USE_COLOR and supports_256_color()
 T = TypeVar("T")
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 LIVE_STATUS_ENABLED = sys.stdout.isatty()
@@ -71,6 +90,13 @@ _LIVE_STATUS_ACTIVE = False
 _LIVE_STATUS_WIDTH = 0
 TAG_COL_WIDTH = 5
 UPLOAD_TIMEOUT_SECONDS = 20
+
+if USE_256_COLOR:
+    C_PYT = "38;5;33"
+    C_ERR = "38;5;196"
+else:
+    C_PYT = "35"
+    C_ERR = "31"
 
 
 def _tag(name: str, code: str) -> str:
@@ -107,7 +133,7 @@ def update_live_status(msg: str) -> None:
     if not LIVE_STATUS_ENABLED:
         return
 
-    line = f"{_prefix('PYT', '34')}{msg}"
+    line = f"{_prefix('PYT', C_PYT)}{msg}"
     visible = _visible_len(line)
     with _LIVE_STATUS_LOCK:
         pad = ""
@@ -121,12 +147,12 @@ def update_live_status(msg: str) -> None:
 
 def py(msg: str) -> None:
     clear_live_status()
-    print(f"{_prefix('PYT', '34')}{msg}", flush=True)
+    print(f"{_prefix('PYT', C_PYT)}{msg}", flush=True)
 
 
 def err(msg: str) -> None:
     clear_live_status()
-    print(f"{_prefix('ERR', '31')}{msg}", file=sys.stderr, flush=True)
+    print(f"{_prefix('ERR', C_ERR)}{msg}", file=sys.stderr, flush=True)
 
 
 def format_bytes(value: int) -> str:
@@ -292,7 +318,7 @@ def update_conf_file(path: str, updates: Optional[Dict[str, str]] = None, remove
 
 def prompt_input(prompt: str, secret: bool = False) -> str:
     del secret  # Plain input is the most reliable across Git Bash + Windows Python.
-    prompt_text = f"{_prefix('PYT', '34')}{prompt}"
+    prompt_text = f"{_prefix('PYT', C_PYT)}{prompt}"
 
     # Primary path: explicit prompt + stdin read.
     try:
@@ -371,7 +397,7 @@ def main() -> int:
         err("telethon is not installed. Install it with: pip install telethon")
         return 2
 
-    # Keep terminal output clean: only our own [PY]/[ERROR] messages.
+    # Keep terminal output clean: only our own [PYT]/[ERR] messages.
     telethon_logger = logging.getLogger("telethon")
     telethon_logger.handlers = [logging.NullHandler()]
     telethon_logger.propagate = False

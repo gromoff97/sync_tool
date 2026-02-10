@@ -3,33 +3,53 @@ set -euo pipefail
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+supports_256_color() {
+  [[ "${FORCE_256_COLOR:-0}" != "0" ]] && return 0
+  [[ "${TERM:-}" == *256color* ]] && return 0
+  [[ -n "${COLORTERM:-}" ]] && return 0
+  [[ -n "${WT_SESSION:-}" ]] && return 0
+  [[ -n "${MSYSTEM:-}" ]] && return 0
+  [[ -n "${ANSICON:-}" ]] && return 0
+  [[ "${ConEmuANSI:-}" == "ON" ]] && return 0
+  return 1
+}
+
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   C_RESET=$'\033[0m'
-  C_RED=$'\033[31m'
-  C_YELLOW=$'\033[33m'
-  C_CYAN=$'\033[36m'
-  C_GREEN=$'\033[32m'
-  C_BLUE=$'\033[34m'
-  C_MAGENTA=$'\033[35m'
+  if supports_256_color; then
+    USE_256_COLOR="1"
+    C_PKG=$'\033[38;5;45m'
+    C_GIT=$'\033[38;5;208m'
+    C_TAR=$'\033[38;5;220m'
+    C_PYT=$'\033[38;5;33m'
+    C_ERR=$'\033[38;5;196m'
+  else
+    USE_256_COLOR="0"
+    C_PKG=$'\033[34m'
+    C_GIT=$'\033[36m'
+    C_TAR=$'\033[33m'
+    C_PYT=$'\033[35m'
+    C_ERR=$'\033[31m'
+  fi
 else
+  USE_256_COLOR="0"
   C_RESET=''
-  C_RED=''
-  C_YELLOW=''
-  C_CYAN=''
-  C_GREEN=''
-  C_BLUE=''
-  C_MAGENTA=''
+  C_PKG=''
+  C_GIT=''
+  C_TAR=''
+  C_PYT=''
+  C_ERR=''
 fi
 
 TAG_COL_WIDTH=5
 log_line()  { local color="$1" tag="$2"; shift 2; printf '%b%-*s%b %s\n' "$color" "$TAG_COL_WIDTH" "[$tag]" "$C_RESET" "$*"; }
 err_line()  { local color="$1" tag="$2"; shift 2; printf '%b%-*s%b %s\n' "$color" "$TAG_COL_WIDTH" "[$tag]" "$C_RESET" "$*" >&2; }
-log_pack()  { log_line "$C_CYAN" "PKG" "$*"; }
-log_git()   { log_line "$C_YELLOW" "GIT" "$*"; }
-log_tar()   { log_line "$C_MAGENTA" "TAR" "$*"; }
-log_py()    { log_line "$C_BLUE" "PYT" "$*"; }
-log_ok()    { log_line "$C_GREEN" "PKG" "$*"; }
-die()       { err_line "$C_RED" "ERR" "$*"; exit 1; }
+log_pack()  { log_line "$C_PKG" "PKG" "$*"; }
+log_git()   { log_line "$C_GIT" "GIT" "$*"; }
+log_tar()   { log_line "$C_TAR" "TAR" "$*"; }
+log_py()    { log_line "$C_PYT" "PYT" "$*"; }
+log_ok()    { log_line "$C_PKG" "PKG" "$*"; }
+die()       { err_line "$C_ERR" "ERR" "$*"; exit 1; }
 
 require_tools() {
   have git || die "git not found"
@@ -296,6 +316,8 @@ send_to_telegram_personal() {
 
   if [[ -z "$C_RESET" ]]; then
     NO_COLOR=1 "${cmd[@]}"
+  elif [[ "$USE_256_COLOR" == "1" ]]; then
+    FORCE_COLOR=1 FORCE_256_COLOR=1 "${cmd[@]}"
   else
     FORCE_COLOR=1 "${cmd[@]}"
   fi
