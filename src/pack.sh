@@ -487,7 +487,7 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
   log_py "Sending archive to Telegram..."
   send_to_telegram_personal "$final_path" "$TG_CAPTION" "$TELEGRAM_CONFIG_FILE"
   rm -f -- "$final_path" || die "Uploaded to Telegram, but failed to delete local pack: $final_path"
-  log_ok "Uploaded to Telegram and removed local file: $final_path"
+  log_ok "Removed local file: $final_path"
 else
   log_ok "Pack created: $final_path"
 fi

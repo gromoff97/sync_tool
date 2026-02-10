@@ -36,6 +36,12 @@ def supports_color() -> bool:
     if os.name != "nt":
         return True
 
+    # Git Bash / MSYS / Cygwin terminals on Windows.
+    if os.getenv("MSYSTEM") or os.getenv("CYGWIN"):
+        return True
+    if term.startswith("xterm") or "color" in term:
+        return True
+
     # Windows terminals with ANSI support.
     if os.getenv("WT_SESSION"):
         return True
