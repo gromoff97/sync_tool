@@ -356,7 +356,7 @@ fi
 
 info "Picked latest pack: $PACK_FILE"
 info "Project: $PROJECT_NAME"
-info "Peer namespace: refs/remotes/$PEER/*"
+info "Peer: $PEER"
 if [[ "$MODE" == "bootstrap" ]]; then
   info "Target repo will be created at: $TARGET_REPO"
 fi
@@ -514,10 +514,7 @@ if [[ "$FORCE_TAGS" == "0" ]]; then
   done < "$incoming_refs"
 
   if [[ "${#tag_conflicts[@]}" -gt 0 ]]; then
-    warn "Tag conflicts (local tags differ from pack; not updated without --force-tags 1):"
-    for tag in "${tag_conflicts[@]}"; do
-      warn "  - $tag"
-    done
+    warn "Tag conflicts (not updated without --force-tags 1): ${tag_conflicts[*]}"
   fi
 fi
 
@@ -533,9 +530,7 @@ if [[ "$PRUNE_REMOTE_REFS" == "1" ]]; then
       fi
     fi
   done < <(git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=3)' "refs/remotes/$PEER/" | tr -d '\r' | sort)
-  if [[ "$removed_remote" -gt 0 ]]; then
-    info "Pruned remote refs: $removed_remote"
-  fi
+  [[ "$removed_remote" -gt 0 ]] && info "Pruned remote refs: $removed_remote"
 fi
 
 mapfile -t branches < <(git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=3)' "refs/remotes/$PEER/" | tr -d '\r' | sort)
@@ -557,10 +552,7 @@ if [[ "$FF_ONLY" == "1" ]]; then
     fi
   done
   if [[ "${#diverged[@]}" -gt 0 ]]; then
-    warn "DIVERGED branches (fast-forward impossible). Local branches NOT updated:"
-    for b in "${diverged[@]}"; do
-      warn "  - $b"
-    done
+    warn "DIVERGED branches (fast-forward impossible): ${diverged[*]}"
     die "Resolve manually (merge/rebase), or use --ff-only 0 (dangerous)."
   fi
 fi
