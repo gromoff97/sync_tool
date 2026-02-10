@@ -88,7 +88,6 @@ LIVE_STATUS_ENABLED = sys.stdout.isatty()
 _LIVE_STATUS_LOCK = threading.Lock()
 _LIVE_STATUS_ACTIVE = False
 _LIVE_STATUS_WIDTH = 0
-TAG_COL_WIDTH = 5
 UPLOAD_TIMEOUT_SECONDS = 20
 
 if USE_256_COLOR:
@@ -106,9 +105,7 @@ def _tag(name: str, code: str) -> str:
 
 
 def _prefix(name: str, code: str) -> str:
-    raw = f"[{name}]"
-    pad = " " * max(1, TAG_COL_WIDTH - len(raw) + 1)
-    return f"{_tag(name, code)}{pad}"
+    return f"{_tag(name, code)} "
 
 
 def _visible_len(text: str) -> int:

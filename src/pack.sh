@@ -18,37 +18,32 @@ if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   C_RESET=$'\033[0m'
   if supports_256_color; then
     USE_256_COLOR="1"
-    C_PKG=$'\033[38;5;45m'
+    C_APP=$'\033[38;5;45m'
     C_GIT=$'\033[38;5;208m'
     C_TAR=$'\033[38;5;220m'
-    C_PYT=$'\033[38;5;33m'
     C_ERR=$'\033[38;5;196m'
   else
     USE_256_COLOR="0"
-    C_PKG=$'\033[34m'
+    C_APP=$'\033[34m'
     C_GIT=$'\033[36m'
     C_TAR=$'\033[33m'
-    C_PYT=$'\033[35m'
     C_ERR=$'\033[31m'
   fi
 else
   USE_256_COLOR="0"
   C_RESET=''
-  C_PKG=''
+  C_APP=''
   C_GIT=''
   C_TAR=''
-  C_PYT=''
   C_ERR=''
 fi
 
-TAG_COL_WIDTH=5
-log_line()  { local color="$1" tag="$2"; shift 2; printf '%b%-*s%b %s\n' "$color" "$TAG_COL_WIDTH" "[$tag]" "$C_RESET" "$*"; }
-err_line()  { local color="$1" tag="$2"; shift 2; printf '%b%-*s%b %s\n' "$color" "$TAG_COL_WIDTH" "[$tag]" "$C_RESET" "$*" >&2; }
-log_pack()  { log_line "$C_PKG" "PKG" "$*"; }
+log_line()  { local color="$1" tag="$2"; shift 2; printf '%b[%s]%b %s\n' "$color" "$tag" "$C_RESET" "$*"; }
+err_line()  { local color="$1" tag="$2"; shift 2; printf '%b[%s]%b %s\n' "$color" "$tag" "$C_RESET" "$*" >&2; }
+log_pack()  { log_line "$C_APP" "APP" "$*"; }
 log_git()   { log_line "$C_GIT" "GIT" "$*"; }
 log_tar()   { log_line "$C_TAR" "TAR" "$*"; }
-log_py()    { log_line "$C_PYT" "PYT" "$*"; }
-log_ok()    { log_line "$C_PKG" "PKG" "$*"; }
+log_ok()    { log_line "$C_APP" "APP" "$*"; }
 die()       { err_line "$C_ERR" "ERR" "$*"; exit 1; }
 
 require_tools() {
@@ -525,7 +520,7 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
     TG_CAPTION="From **$(escape_md "$MACHINE_NAME")**"
   fi
 
-  log_py "Sending archive to Telegram..."
+  log_pack "Starting Telegram sender script..."
   DELETE_FINAL_ON_EXIT="1"
   send_to_telegram_personal "$final_path" "$TG_CAPTION" "$TELEGRAM_CONFIG_FILE"
   rm -f -- "$final_path" || die "Uploaded to Telegram, but failed to delete local pack: $final_path"
