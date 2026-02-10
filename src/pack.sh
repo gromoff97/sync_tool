@@ -123,18 +123,41 @@ load_config_overrides() {
       output_dir|OUTPUT_DIR)       OUTPUT_DIR="$(expand_user_path "$value")" ;;
       pack_prefix|PACK_PREFIX)     PACK_PREFIX="$value" ;;
       machine_name|MACHINE_NAME)   MACHINE_NAME="$value" ;;
-      send_telegram|SEND_TELEGRAM|SEND_TO_TELEGRAM) SEND_TO_TELEGRAM="$value" ;;
-      telegram_bot_token|TELEGRAM_BOT_TOKEN|tg_bot_token|TG_BOT_TOKEN) TG_BOT_TOKEN="$value" ;;
-      telegram_chat_id|TELEGRAM_CHAT_ID|tg_chat_id|TG_CHAT_ID) TG_CHAT_ID="$value" ;;
-      telegram_caption|TELEGRAM_CAPTION|tg_caption|TG_CAPTION) TG_CAPTION="$value" ;;
       *) ;;
     esac
   done < "$cfg"
 }
 
-validate_01() {
-  local name="$1" value="$2"
-  [[ "$value" == "0" || "$value" == "1" ]] || die "$name must be 0|1"
+load_telegram_config() {
+  local cfg="$1"
+  [[ -f "$cfg" ]] || die "Telegram send requested (-s), but config not found: $cfg"
+
+  TG_BOT_TOKEN=""
+  TG_CHAT_ID=""
+  TG_CAPTION=""
+
+  local raw line key value
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    raw="${raw%$'\r'}"
+    line="${raw%%#*}"
+    line="$(trim_ws "$line")"
+    [[ -n "$line" ]] || continue
+    [[ "$line" == *=* ]] || die "Invalid config line in $cfg: $raw"
+
+    key="$(trim_ws "${line%%=*}")"
+    value="$(trim_ws "${line#*=}")"
+    value="$(strip_quotes "$value")"
+
+    case "$key" in
+      telegram_bot_token|TELEGRAM_BOT_TOKEN|bot_token|BOT_TOKEN) TG_BOT_TOKEN="$value" ;;
+      telegram_chat_id|TELEGRAM_CHAT_ID|chat_id|CHAT_ID) TG_CHAT_ID="$value" ;;
+      telegram_caption|TELEGRAM_CAPTION|caption|CAPTION) TG_CAPTION="$value" ;;
+      *) ;;
+    esac
+  done < "$cfg"
+
+  [[ -n "$TG_BOT_TOKEN" ]] || die "telegram_bot_token is required in $cfg"
+  [[ -n "$TG_CHAT_ID" ]] || die "telegram_chat_id is required in $cfg"
 }
 
 send_to_telegram() {
@@ -194,7 +217,7 @@ ensure_repo_ok_and_clean() {
   p="$(gitpath "$repo" index.lock)";        [[ ! -f "$p" ]] || die "index.lock exists. Another git process running?"
 
   local st
-  st="$(git -C "$repo" status --porcelain | awk 'substr($0,4)!="unpack.conf"')"
+  st="$(git -C "$repo" status --porcelain | awk 'substr($0,4)!="unpack.conf" && substr($0,4)!="telegram.conf"')"
   [[ -z "$st" ]] || die "Repo has uncommitted/untracked changes. Commit/stash first."
 }
 
@@ -207,17 +230,17 @@ Optional (defaults):
   --output-dir PATH          (default: ~/syncpacks)
   --pack-prefix PREFIX       (default: syncpack)
   --machine-name NAME        (default: auto-detected; written to manifest only)
-  --send-telegram 0|1        (default: 0)
-  --telegram-bot-token TOKEN (default: $TELEGRAM_BOT_TOKEN)
-  --telegram-chat-id ID      (default: $TELEGRAM_CHAT_ID)
-  --telegram-caption TEXT    (default: file name)
+  -s                         send archive to Telegram using <repo>/telegram.conf
   --help
 
 Config:
-  <repo>/unpack.conf (if present) overrides CLI options.
+  <repo>/unpack.conf   (if present) overrides pack options above.
+  <repo>/telegram.conf used only with -s; required keys:
+                       telegram_bot_token, telegram_chat_id
+                       optional key: telegram_caption
 
 Example:
-  ./pack --output-dir /c/Work/out
+  ./pack -s
 EOF
   exit 2
 }
@@ -229,9 +252,9 @@ OUTPUT_DIR="${HOME:+$HOME/syncpacks}"
 PACK_PREFIX="syncpack"
 MACHINE_NAME=""
 SEND_TO_TELEGRAM="0"
-TG_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
-TG_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
-TG_CAPTION="${TELEGRAM_CAPTION:-}"
+TG_BOT_TOKEN=""
+TG_CHAT_ID=""
+TG_CAPTION=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -241,14 +264,7 @@ while [[ $# -gt 0 ]]; do
     --pack-prefix=*)   PACK_PREFIX="${1#*=}"; shift 1;;
     --machine-name)    MACHINE_NAME="${2:-}"; shift 2;;
     --machine-name=*)  MACHINE_NAME="${1#*=}"; shift 1;;
-    --send-telegram)   SEND_TO_TELEGRAM="${2:-}"; shift 2;;
-    --send-telegram=*) SEND_TO_TELEGRAM="${1#*=}"; shift 1;;
-    --telegram-bot-token)   TG_BOT_TOKEN="${2:-}"; shift 2;;
-    --telegram-bot-token=*) TG_BOT_TOKEN="${1#*=}"; shift 1;;
-    --telegram-chat-id)     TG_CHAT_ID="${2:-}"; shift 2;;
-    --telegram-chat-id=*)   TG_CHAT_ID="${1#*=}"; shift 1;;
-    --telegram-caption)     TG_CAPTION="${2:-}"; shift 2;;
-    --telegram-caption=*)   TG_CAPTION="${1#*=}"; shift 1;;
+    -s)               SEND_TO_TELEGRAM="1"; shift 1;;
     --help|-h)         usage;;
     *) die "Unknown option: $1 (use --help)";;
   esac
@@ -262,7 +278,6 @@ load_config_overrides "$CONFIG_FILE"
 
 [[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
 [[ -n "$OUTPUT_DIR" ]] || die "HOME is not set; use --output-dir PATH."
-validate_01 "--send-telegram" "$SEND_TO_TELEGRAM"
 
 if [[ -z "$MACHINE_NAME" ]]; then
   MACHINE_NAME="$(detect_machine_name)"
@@ -326,8 +341,8 @@ tar -tzf "$tmp_out" | tr -d '\r' | awk 'BEGIN{b=0;m=0;bad=0}
 mv -f "$tmp_out" "$final_path" || die "Cannot move archive to output dir"
 
 if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
-  [[ -n "$TG_BOT_TOKEN" ]] || die "--telegram-bot-token is required when --send-telegram=1"
-  [[ -n "$TG_CHAT_ID" ]] || die "--telegram-chat-id is required when --send-telegram=1"
+  TELEGRAM_CONFIG_FILE="$REPO_DIR/telegram.conf"
+  load_telegram_config "$TELEGRAM_CONFIG_FILE"
   if [[ -z "$TG_CAPTION" ]]; then
     TG_CAPTION="$final"
   fi

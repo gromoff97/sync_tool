@@ -134,7 +134,7 @@ ensure_repo_ok_and_clean() {
   p="$(gitpath "$repo" index.lock)";        [[ ! -f "$p" ]] || die "index.lock exists. Another git process running?"
 
   local st
-  st="$(git -C "$repo" status --porcelain | awk 'substr($0,4)!="unpack.conf"')"
+  st="$(git -C "$repo" status --porcelain | awk 'substr($0,4)!="unpack.conf" && substr($0,4)!="telegram.conf"')"
   [[ -z "$st" ]] || die "Repo has uncommitted/untracked changes. Clean it first."
 }
 
