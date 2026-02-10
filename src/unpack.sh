@@ -386,11 +386,52 @@ if ! git -C "$REPO_DIR" bundle verify "$bundle" >"$verify_out" 2>&1; then
   cat "$verify_out" >&2
   die "Bundle verification failed. Ask sender to send a FULL bundle (--branches --tags)."
 fi
+incoming_refs="$tmp/incoming_refs.txt"
+git bundle list-heads "$bundle" 2>/dev/null | tr -d '\r' > "$incoming_refs" || die "Failed to list heads from bundle"
+
+if [[ "$MODE" == "existing" ]]; then
+  identical="1"
+  while read -r sha ref; do
+    [[ -n "$sha" && -n "$ref" ]] || continue
+    if [[ "$ref" == refs/heads/* ]]; then
+      b="${ref#refs/heads/}"
+      if ! git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
+        identical="0"
+        break
+      fi
+      local_sha="$(git -C "$REPO_DIR" rev-parse "refs/heads/$b")"
+      if [[ "$local_sha" != "$sha" ]]; then
+        identical="0"
+        break
+      fi
+    elif [[ "$ref" == refs/tags/* ]]; then
+      t="${ref#refs/tags/}"
+      if ! git -C "$REPO_DIR" show-ref --verify --quiet "refs/tags/$t"; then
+        identical="0"
+        break
+      fi
+      local_sha="$(git -C "$REPO_DIR" rev-parse "refs/tags/$t")"
+      if [[ "$local_sha" != "$sha" ]]; then
+        identical="0"
+        break
+      fi
+    fi
+  done < "$incoming_refs"
+
+  if [[ "$identical" == "1" ]]; then
+    info "Bundle already applied; repository matches pack."
+    if ! rm -f -- "$PACK_FILE"; then
+      warn "Matched, but failed to delete pack: $PACK_FILE"
+    else
+      info "Deleted pack: $PACK_FILE"
+    fi
+    exit 0
+  fi
+fi
 
 incoming_list="$tmp/incoming_branches.txt"
-git bundle list-heads "$bundle" 2>/dev/null \
-  | awk '{ref=$2; sub("^refs/heads/","",ref); if(length(ref)>0) print ref}' \
-  | tr -d '\r' | sort -u > "$incoming_list" || die "Failed to list heads from bundle"
+awk '{ref=$2; sub("^refs/heads/","",ref); if(length(ref)>0) print ref}' \
+  "$incoming_refs" | sort -u > "$incoming_list" || die "Failed to list heads from bundle"
 
 old_remote="$tmp/old_remote.tsv"
 git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=3)\t%(objectname)' "refs/remotes/$PEER/" \
