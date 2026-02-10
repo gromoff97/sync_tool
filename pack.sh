@@ -112,13 +112,13 @@ pack.sh — create FULL git bundle pack (all branches + tags) into a .tgz
 File name: <prefix>_<project>_<timestamp>.tgz
 
 Optional (defaults):
-  --output-dir PATH          (default: ~/syncpacks)
+  --output-dir PATH          (default: current working directory)
   --pack-prefix PREFIX       (default: syncpack)
   --machine-name NAME        (default: auto-detected; written to manifest only)
   --help
 
 Example:
-  ./pack.sh --output-dir /c/Work/out
+  ./pack --output-dir /c/Work/out
 EOF
   exit 2
 }
@@ -126,7 +126,7 @@ EOF
 # ---- parse args ----
 require_tools
 
-OUTPUT_DIR="${HOME:+$HOME/syncpacks}"
+OUTPUT_DIR=""
 PACK_PREFIX="syncpack"
 MACHINE_NAME=""
 
@@ -143,7 +143,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$OUTPUT_DIR" ]] || die "HOME is not set; use --output-dir PATH."
 [[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
 
 if [[ -z "$MACHINE_NAME" ]]; then
@@ -156,6 +155,10 @@ REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 
 PROJECT_NAME="$(basename "$REPO_DIR")"
 PROJECT_NAME="$(sanitize_for_manifest "$PROJECT_NAME")"
+
+if [[ -z "$OUTPUT_DIR" ]]; then
+  OUTPUT_DIR="$PWD"
+fi
 
 mkdir -p "$OUTPUT_DIR" || die "Cannot create --output-dir: $OUTPUT_DIR"
 ensure_repo_ok_and_clean "$REPO_DIR"
