@@ -21,12 +21,15 @@ else
   C_MAGENTA=''
 fi
 
-log_pack()  { printf '%b[PACK]%b %s\n' "$C_CYAN" "$C_RESET" "$*"; }
-log_git()   { printf '%b[GIT]%b  %s\n' "$C_YELLOW" "$C_RESET" "$*"; }
-log_tar()   { printf '%b[TAR]%b  %s\n' "$C_MAGENTA" "$C_RESET" "$*"; }
-log_py()    { printf '%b[PY]%b   %s\n' "$C_BLUE" "$C_RESET" "$*"; }
-log_ok()    { printf '%b[PACK]%b %s\n' "$C_GREEN" "$C_RESET" "$*"; }
-die()       { printf '%b[ERROR]%b %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+TAG_COL_WIDTH=7
+log_line()  { local color="$1" tag="$2"; shift 2; printf '%b%-*s%b %s\n' "$color" "$TAG_COL_WIDTH" "[$tag]" "$C_RESET" "$*"; }
+err_line()  { local color="$1" tag="$2"; shift 2; printf '%b%-*s%b %s\n' "$color" "$TAG_COL_WIDTH" "[$tag]" "$C_RESET" "$*" >&2; }
+log_pack()  { log_line "$C_CYAN" "PACK" "$*"; }
+log_git()   { log_line "$C_YELLOW" "GIT" "$*"; }
+log_tar()   { log_line "$C_MAGENTA" "TAR" "$*"; }
+log_py()    { log_line "$C_BLUE" "PY" "$*"; }
+log_ok()    { log_line "$C_GREEN" "PACK" "$*"; }
+die()       { err_line "$C_RED" "ERROR" "$*"; exit 1; }
 
 require_tools() {
   have git || die "git not found"
@@ -437,7 +440,7 @@ cleanup() {
         log_pack "Removed local file after failure: $final_path"
       fi
     else
-      printf '%b[ERROR]%b Failed to delete local pack after failure: %s\n' "$C_RED" "$C_RESET" "$final_path" >&2
+      err_line "$C_RED" "ERROR" "Failed to delete local pack after failure: $final_path"
     fi
   fi
 }

@@ -69,6 +69,7 @@ LIVE_STATUS_ENABLED = sys.stdout.isatty()
 _LIVE_STATUS_LOCK = threading.Lock()
 _LIVE_STATUS_ACTIVE = False
 _LIVE_STATUS_WIDTH = 0
+TAG_COL_WIDTH = 7
 UPLOAD_TIMEOUT_SECONDS = 20
 
 
@@ -76,6 +77,12 @@ def _tag(name: str, code: str) -> str:
     if not USE_COLOR:
         return f"[{name}]"
     return f"\033[{code}m[{name}]\033[0m"
+
+
+def _prefix(name: str, code: str) -> str:
+    raw = f"[{name}]"
+    pad = " " * max(1, TAG_COL_WIDTH - len(raw) + 1)
+    return f"{_tag(name, code)}{pad}"
 
 
 def _visible_len(text: str) -> int:
@@ -100,7 +107,7 @@ def update_live_status(msg: str) -> None:
     if not LIVE_STATUS_ENABLED:
         return
 
-    line = f"{_tag('PY', '34')} {msg}"
+    line = f"{_prefix('PY', '34')}{msg}"
     visible = _visible_len(line)
     with _LIVE_STATUS_LOCK:
         pad = ""
@@ -114,15 +121,12 @@ def update_live_status(msg: str) -> None:
 
 def py(msg: str) -> None:
     clear_live_status()
-    print(f"{_tag('PY', '34')} {msg}", flush=True)
+    print(f"{_prefix('PY', '34')}{msg}", flush=True)
 
 
 def err(msg: str) -> None:
     clear_live_status()
-    if USE_COLOR:
-        print(f"\033[31m[ERROR]\033[0m {msg}", file=sys.stderr, flush=True)
-    else:
-        print(f"[ERROR] {msg}", file=sys.stderr, flush=True)
+    print(f"{_prefix('ERROR', '31')}{msg}", file=sys.stderr, flush=True)
 
 
 def format_bytes(value: int) -> str:
@@ -288,7 +292,7 @@ def update_conf_file(path: str, updates: Optional[Dict[str, str]] = None, remove
 
 def prompt_input(prompt: str, secret: bool = False) -> str:
     del secret  # Plain input is the most reliable across Git Bash + Windows Python.
-    prompt_text = f"{_tag('PY', '34')} {prompt}"
+    prompt_text = f"{_prefix('PY', '34')}{prompt}"
 
     # Primary path: explicit prompt + stdin read.
     try:
