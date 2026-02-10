@@ -214,7 +214,7 @@ select_python_for_telegram() {
 }
 
 send_to_telegram_personal() {
-  local file="$1" caption="$2"
+  local file="$1" caption="$2" config_file="$3"
   local py_bin
   py_bin="$(select_python_for_telegram "$TG_PYTHON_MIN")"
   python_module_available "$py_bin" "telethon" || die "Python module 'telethon' is not installed for $py_bin. Install it before using -s."
@@ -229,6 +229,7 @@ send_to_telegram_personal() {
     --api-id "$TG_API_ID"
     --api-hash "$TG_API_HASH"
     --session "$TG_SESSION"
+    --config-file "$config_file"
     --to "$TG_TO"
     --file "$file"
   )
@@ -309,6 +310,7 @@ Config:
                        optional keys:
                        telegram_session or telegram_session_string
                        telegram_phone, telegram_code, telegram_password
+                       (code can be entered interactively)
                        telegram_caption, telegram_python_min
                        default caption (if not set): From <machine_name>
                        (default python minimum: 3.8)
@@ -426,7 +428,7 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
     TG_CAPTION="From <${MACHINE_NAME}>"
   fi
 
-  send_to_telegram_personal "$final_path" "$TG_CAPTION"
+  send_to_telegram_personal "$final_path" "$TG_CAPTION" "$TELEGRAM_CONFIG_FILE"
   rm -f -- "$final_path" || die "Uploaded to Telegram, but failed to delete local pack: $final_path"
   echo "OK: uploaded to Telegram and removed local pack: $final_path"
 else
