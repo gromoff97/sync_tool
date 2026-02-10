@@ -132,8 +132,10 @@ load_telegram_config() {
   local cfg="$1"
   [[ -f "$cfg" ]] || die "Telegram send requested (-s), but config not found: $cfg"
 
-  TG_BOT_TOKEN=""
-  TG_CHAT_ID=""
+  TG_API_ID=""
+  TG_API_HASH=""
+  TG_TO=""
+  TG_SESSION="${HOME:+$HOME/.sync_tool_telegram}"
   TG_CAPTION=""
 
   local raw line key value
@@ -149,37 +151,51 @@ load_telegram_config() {
     value="$(strip_quotes "$value")"
 
     case "$key" in
-      telegram_bot_token|TELEGRAM_BOT_TOKEN|bot_token|BOT_TOKEN) TG_BOT_TOKEN="$value" ;;
-      telegram_chat_id|TELEGRAM_CHAT_ID|chat_id|CHAT_ID) TG_CHAT_ID="$value" ;;
+      telegram_api_id|TELEGRAM_API_ID|api_id|API_ID) TG_API_ID="$value" ;;
+      telegram_api_hash|TELEGRAM_API_HASH|api_hash|API_HASH) TG_API_HASH="$value" ;;
+      telegram_to|TELEGRAM_TO|to|TO|telegram_peer|TELEGRAM_PEER|peer|PEER) TG_TO="$value" ;;
+      telegram_session|TELEGRAM_SESSION|session|SESSION) TG_SESSION="$(expand_user_path "$value")" ;;
       telegram_caption|TELEGRAM_CAPTION|caption|CAPTION) TG_CAPTION="$value" ;;
       *) ;;
     esac
   done < "$cfg"
 
-  [[ -n "$TG_BOT_TOKEN" ]] || die "telegram_bot_token is required in $cfg"
-  [[ -n "$TG_CHAT_ID" ]] || die "telegram_chat_id is required in $cfg"
+  [[ -n "$TG_API_ID" ]] || die "telegram_api_id is required in $cfg"
+  [[ -n "$TG_API_HASH" ]] || die "telegram_api_hash is required in $cfg"
+  [[ -n "$TG_TO" ]] || die "telegram_to is required in $cfg"
+  [[ "$TG_API_ID" =~ ^[0-9]+$ ]] || die "telegram_api_id must be an integer in $cfg"
+  [[ -n "$TG_SESSION" ]] || die "telegram_session resolved to empty value in $cfg"
 }
 
-send_to_telegram() {
+send_to_telegram_personal() {
   local file="$1" caption="$2"
-  have curl || die "curl not found (required for Telegram upload)"
-
-  local url response
-  local -a curl_cmd
-
-  url="https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument"
-  curl_cmd=(curl -sS --show-error --fail -F "chat_id=$TG_CHAT_ID" -F "document=@$file")
-  if [[ -n "$caption" ]]; then
-    curl_cmd+=(-F "caption=$caption")
+  local py_bin=""
+  if have python3; then
+    py_bin="python3"
+  elif have python; then
+    py_bin="python"
+  else
+    die "python3/python not found (required for Telegram personal upload)"
   fi
-  curl_cmd+=("$url")
 
-  response="$("${curl_cmd[@]}")" || die "Telegram upload failed."
-  echo "$response" | awk '
-    BEGIN { ok=0 }
-    /"ok"[[:space:]]*:[[:space:]]*true/ { ok=1 }
-    END { exit(ok ? 0 : 1) }
-  ' || die "Telegram API returned non-ok response: $response"
+  local script_dir script_path
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  script_path="$script_dir/send_telegram_personal.py"
+  [[ -f "$script_path" ]] || die "Telegram sender script not found: $script_path"
+
+  local -a cmd
+  cmd=("$py_bin" "$script_path"
+    --api-id "$TG_API_ID"
+    --api-hash "$TG_API_HASH"
+    --session "$TG_SESSION"
+    --to "$TG_TO"
+    --file "$file"
+  )
+  if [[ -n "$caption" ]]; then
+    cmd+=(--caption "$caption")
+  fi
+
+  "${cmd[@]}" || die "Telegram personal upload failed."
 }
 
 gitpath() { git -C "$1" rev-parse --git-path "$2"; }
@@ -230,14 +246,14 @@ Optional (defaults):
   --output-dir PATH          (default: ~/syncpacks)
   --pack-prefix PREFIX       (default: syncpack)
   --machine-name NAME        (default: auto-detected; written to manifest only)
-  -s                         send archive to Telegram using <repo>/telegram.conf
+  -s                         send archive from personal account using <repo>/telegram.conf
   --help
 
 Config:
   <repo>/unpack.conf   (if present) overrides pack options above.
   <repo>/telegram.conf used only with -s; required keys:
-                       telegram_bot_token, telegram_chat_id
-                       optional key: telegram_caption
+                       telegram_api_id, telegram_api_hash, telegram_to
+                       optional keys: telegram_session, telegram_caption
 
 Example:
   ./pack -s
@@ -252,8 +268,10 @@ OUTPUT_DIR="${HOME:+$HOME/syncpacks}"
 PACK_PREFIX="syncpack"
 MACHINE_NAME=""
 SEND_TO_TELEGRAM="0"
-TG_BOT_TOKEN=""
-TG_CHAT_ID=""
+TG_API_ID=""
+TG_API_HASH=""
+TG_TO=""
+TG_SESSION=""
 TG_CAPTION=""
 
 while [[ $# -gt 0 ]]; do
@@ -347,7 +365,7 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
     TG_CAPTION="$final"
   fi
 
-  send_to_telegram "$final_path" "$TG_CAPTION"
+  send_to_telegram_personal "$final_path" "$TG_CAPTION"
   rm -f -- "$final_path" || die "Uploaded to Telegram, but failed to delete local pack: $final_path"
   echo "OK: uploaded to Telegram and removed local pack: $final_path"
 else
