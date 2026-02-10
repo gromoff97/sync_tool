@@ -252,6 +252,7 @@ send_to_telegram_personal() {
   local py_bin
   py_bin="$(select_python_for_telegram "$TG_PYTHON_MIN")"
   python_module_available "$py_bin" "telethon" || die "Python module 'telethon' is not installed for $py_bin. Install it before using -s."
+  python_module_available "$py_bin" "colorama" || die "Python module 'colorama' is not installed for $py_bin. Install it before using -s."
 
   local script_dir script_path
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -361,6 +362,7 @@ Config:
                        telegram_caption, telegram_python_min
                        default caption (if not set): From **machine_name**
                        (default python minimum: 3.8)
+                       python modules for -s: telethon, colorama
 
 Example:
   ./pack -s

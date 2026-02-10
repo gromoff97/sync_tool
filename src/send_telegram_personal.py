@@ -187,6 +187,13 @@ def main() -> int:
         err(f"file not found: {args.file}")
         return 1
 
+    try:
+        from colorama import just_fix_windows_console
+    except Exception:
+        err("colorama is not installed. Install it with: pip install colorama")
+        return 2
+    just_fix_windows_console()
+
     session_value = (args.session or "").strip()
     if not session_value or looks_like_placeholder(session_value):
         session_value = "~/.sync_tool_telegram"
