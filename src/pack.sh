@@ -137,6 +137,11 @@ strip_quotes() {
   printf '%s' "$s"
 }
 
+looks_like_placeholder() {
+  local v="${1^^}"
+  [[ "$v" == REPLACE* || "$v" == *XXXXXXXX* ]]
+}
+
 expand_user_path() {
   local p="$1"
   local h="${HOME:-}"
@@ -227,6 +232,17 @@ load_telegram_config() {
 
   [[ -z "$TG_API_ID" || "$TG_API_ID" =~ ^[0-9]+$ ]] || die "telegram_api_id must be an integer in $cfg"
   [[ "$TG_PYTHON_MIN" =~ ^[0-9]+\.[0-9]+$ ]] || die "telegram_python_min must be MAJOR.MINOR in $cfg"
+}
+
+require_telegram_config() {
+  local cfg="$1"
+  [[ -f "$cfg" ]] || die "telegram.conf not found. Run: pack --mproto-login"
+  [[ -n "$TG_API_ID" ]] || die "telegram_api_id missing in $cfg. Run: pack --mproto-login"
+  [[ -n "$TG_API_HASH" ]] || die "telegram_api_hash missing in $cfg. Run: pack --mproto-login"
+  [[ -n "$TG_TO" ]] || die "telegram_to missing in $cfg. Run: pack --mproto-login"
+  if looks_like_placeholder "$TG_API_ID" || looks_like_placeholder "$TG_API_HASH" || looks_like_placeholder "$TG_TO"; then
+    die "telegram.conf has placeholder values. Run: pack --mproto-login"
+  fi
 }
 
 python_version_at_least_cmd() {
@@ -380,6 +396,7 @@ send_to_telegram_personal() {
     --config-file "$config_file"
     --to "$TG_TO"
     --file "$file"
+    --non-interactive
   )
   if [[ -n "$TG_SESSION_STRING" ]]; then
     cmd+=(--session-string "$TG_SESSION_STRING")
@@ -406,7 +423,7 @@ send_to_telegram_personal() {
   fi
 }
 
-send_mtproto_test() {
+send_mproto_login() {
   local config_file="$1"
   local -a py_cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
@@ -429,7 +446,7 @@ send_mtproto_test() {
     --api-hash "$TG_API_HASH"
     --session "$TG_SESSION"
     --config-file "$config_file"
-    --mtproto-test
+    --mproto-login
   )
   if [[ -n "$TG_SESSION_STRING" ]]; then
     cmd+=(--session-string "$TG_SESSION_STRING")
@@ -499,14 +516,13 @@ Optional (defaults):
   --pack-prefix PREFIX       (default: syncpack)
   --machine-name NAME        (default: auto-detected; written to manifest only)
   -s                         send archive from personal account using <tool_dir>/conf/telegram.conf
-  --mtproto-test             test MTProto connectivity using <tool_dir>/conf/telegram.conf
+  --mproto-login             interactive MTProto login + connection test, writes <tool_dir>/conf/telegram.conf
   --help
 
 Config:
   <tool_dir>/conf/pack.conf (if present) overrides pack options above.
   <tool_dir>/conf/telegram.conf used only with -s.
-                       Missing values are requested interactively on first run
-                       and persisted back to telegram.conf automatically.
+                       pack -s is non-interactive; run --mproto-login to create/refresh telegram.conf.
                        supported keys:
                        telegram_api_id, telegram_api_hash, telegram_to
                        telegram_session or telegram_session_string
@@ -530,7 +546,8 @@ OUTPUT_DIR="${HOME:+$HOME/syncpacks}"
 PACK_PREFIX="syncpack"
 MACHINE_NAME=""
 SEND_TO_TELEGRAM="0"
-MTProto_TEST="0"
+MPROTO_LOGIN="0"
+OTHER_OPTS_USED="0"
 TG_API_ID=""
 TG_API_HASH=""
 TG_TO=""
@@ -541,21 +558,25 @@ DELETE_FINAL_ON_EXIT="0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --output-dir)      OUTPUT_DIR="${2:-}"; shift 2;;
-    --output-dir=*)    OUTPUT_DIR="${1#*=}"; shift 1;;
-    --pack-prefix)     PACK_PREFIX="${2:-}"; shift 2;;
-    --pack-prefix=*)   PACK_PREFIX="${1#*=}"; shift 1;;
-    --machine-name)    MACHINE_NAME="${2:-}"; shift 2;;
-    --machine-name=*)  MACHINE_NAME="${1#*=}"; shift 1;;
-    -s)               SEND_TO_TELEGRAM="1"; shift 1;;
-    --mtproto-test)    MTProto_TEST="1"; shift 1;;
+    --output-dir)      OUTPUT_DIR="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
+    --output-dir=*)    OUTPUT_DIR="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
+    --pack-prefix)     PACK_PREFIX="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
+    --pack-prefix=*)   PACK_PREFIX="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
+    --machine-name)    MACHINE_NAME="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
+    --machine-name=*)  MACHINE_NAME="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
+    -s)               SEND_TO_TELEGRAM="1"; OTHER_OPTS_USED="1"; shift 1;;
+    --mproto-login)    MPROTO_LOGIN="1"; shift 1;;
     --help|-h)         usage;;
     *) die "Unknown option: $1 (use --help)";;
   esac
 done
 
+if [[ "$MPROTO_LOGIN" == "1" && "$OTHER_OPTS_USED" == "1" ]]; then
+  die "--mproto-login cannot be combined with other options."
+fi
+
 REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [[ -z "$REPO_DIR" && "$MTProto_TEST" != "1" ]]; then
+if [[ -z "$REPO_DIR" && "$MPROTO_LOGIN" != "1" ]]; then
   die "Run pack.sh inside a git repository."
 fi
 
@@ -566,13 +587,22 @@ CONFIG_FILE="$TOOL_DIR/conf/pack.conf"
 load_config_overrides "$CONFIG_FILE"
 
 [[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
-[[ -n "$OUTPUT_DIR" ]] || die "HOME is not set; use --output-dir PATH."
+if [[ "$MPROTO_LOGIN" != "1" ]]; then
+  [[ -n "$OUTPUT_DIR" ]] || die "HOME is not set; use --output-dir PATH."
+fi
 
-if [[ "$MTProto_TEST" == "1" ]]; then
+if [[ "$MPROTO_LOGIN" == "1" ]]; then
   TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
+  if [[ -f "$TELEGRAM_CONFIG_FILE" && -s "$TELEGRAM_CONFIG_FILE" ]]; then
+    read -r -p "telegram.conf exists. Overwrite? [y/N] " _ans
+    case "${_ans:-}" in
+      y|Y|yes|YES) rm -f -- "$TELEGRAM_CONFIG_FILE" ;;
+      *) die "Aborted. Existing telegram.conf kept." ;;
+    esac
+  fi
   load_telegram_config "$TELEGRAM_CONFIG_FILE"
-  log_pack "MTProto test..."
-  send_mtproto_test "$TELEGRAM_CONFIG_FILE"
+  log_pack "MTProto login..."
+  send_mproto_login "$TELEGRAM_CONFIG_FILE"
   exit $?
 fi
 
@@ -660,6 +690,7 @@ mv -f "$tmp_out" "$final_path" || die "Cannot move archive to output dir"
 if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
   TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
   load_telegram_config "$TELEGRAM_CONFIG_FILE"
+  require_telegram_config "$TELEGRAM_CONFIG_FILE"
   if [[ -z "$TG_CAPTION" ]]; then
     TG_CAPTION="From **$(escape_md "$MACHINE_NAME")**"
   fi

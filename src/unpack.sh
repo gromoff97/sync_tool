@@ -1,11 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+supports_256_color() {
+  [[ "${FORCE_256_COLOR:-0}" != "0" ]] && return 0
+  [[ "${TERM:-}" == *256color* ]] && return 0
+  [[ -n "${COLORTERM:-}" ]] && return 0
+  [[ -n "${WT_SESSION:-}" ]] && return 0
+  [[ -n "${MSYSTEM:-}" ]] && return 0
+  [[ -n "${ANSICON:-}" ]] && return 0
+  [[ "${ConEmuANSI:-}" == "ON" ]] && return 0
+  return 1
+}
+
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   C_RESET=$'\033[0m'
-  C_APP=$'\033[36m'
-  C_WRN=$'\033[33m'
-  C_ERR=$'\033[31m'
+  if supports_256_color; then
+    C_APP=$'\033[36m'
+    C_WRN=$'\033[33m'
+    C_ERR=$'\033[38;5;196m'
+  else
+    C_APP=$'\033[36m'
+    C_WRN=$'\033[33m'
+    C_ERR=$'\033[31m'
+  fi
 else
   C_RESET=''
   C_APP=''

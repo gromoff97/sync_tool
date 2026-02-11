@@ -28,7 +28,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--to", default="", help="Username, phone, user ID, or Saved Messages")
     parser.add_argument("--file", default="")
     parser.add_argument("--caption", default="")
-    parser.add_argument("--mtproto-test", action="store_true", help="Test MTProto connectivity and exit")
+    parser.add_argument("--mproto-login", action="store_true", help="Interactive MTProto login and connection test")
+    parser.add_argument("--mtproto-test", dest="mproto_login", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values")
     return parser.parse_args()
 
 
@@ -93,6 +95,7 @@ _LIVE_STATUS_LOCK = threading.Lock()
 _LIVE_STATUS_ACTIVE = False
 _LIVE_STATUS_WIDTH = 0
 UPLOAD_TIMEOUT_SECONDS = 20
+NON_INTERACTIVE = False
 
 if USE_256_COLOR:
     C_PYT = "38;5;33"
@@ -319,6 +322,8 @@ def update_conf_file(path: str, updates: Optional[Dict[str, str]] = None, remove
 
 def prompt_input(prompt: str, secret: bool = False) -> str:
     del secret  # Plain input is the most reliable across Git Bash + Windows Python.
+    if NON_INTERACTIVE:
+        return ""
     prompt_text = f"{_prefix('PYT', C_PYT)}{prompt}"
 
     # Primary path: explicit prompt + stdin read.
@@ -361,6 +366,8 @@ def prompt_input(prompt: str, secret: bool = False) -> str:
 def resolve_required(name: str, raw_value: str, prompt: str, secret: bool = False) -> str:
     value = (raw_value or "").strip()
     if not value or looks_like_placeholder(value):
+        if NON_INTERACTIVE:
+            raise ValueError(f"{name} is required. Run pack --mproto-login.")
         value = prompt_input(prompt, secret=secret)
     if not value:
         raise ValueError(f"{name} is required.")
@@ -369,10 +376,12 @@ def resolve_required(name: str, raw_value: str, prompt: str, secret: bool = Fals
 
 def main() -> int:
     args = parse_args()
+    global NON_INTERACTIVE
+    NON_INTERACTIVE = bool(args.non_interactive)
 
-    if not args.mtproto_test:
+    if not args.mproto_login:
         if not args.file:
-            err("file is required unless --mtproto-test is set")
+            err("file is required unless --mproto-login is set")
             return 1
         if not os.path.isfile(args.file):
             err(f"file not found: {args.file}")
@@ -515,9 +524,7 @@ def main() -> int:
         api_id = int(api_id_raw)
 
         api_hash = resolve_required("telegram_api_hash", args.api_hash, "Enter telegram_api_hash: ")
-        to_peer = ""
-        if not args.mtproto_test:
-            to_peer = resolve_required("telegram_to", args.to, "Enter telegram_to (@username/phone/id/me): ")
+        to_peer = resolve_required("telegram_to", args.to, "Enter telegram_to (@username/phone/id/me): ")
     except ValueError as exc:
         err(str(exc))
         return 3
@@ -530,7 +537,6 @@ def main() -> int:
     }
     if to_peer:
         updates["telegram_to"] = to_peer
-    update_conf_file(args.config_file, updates=updates)
 
     session_string = (args.session_string or "").strip()
     if looks_like_placeholder(session_string):
@@ -557,6 +563,8 @@ def main() -> int:
         nonlocal current_stage
         if client.is_user_authorized():
             return
+        if NON_INTERACTIVE:
+            raise ValueError("telegram session is not authorized. Run pack --mproto-login.")
 
         phone = resolve_required("telegram_phone", args.phone, "Enter telegram_phone (+7999...): ")
         current_stage = "request_code"
@@ -590,8 +598,8 @@ def main() -> int:
             remove_keys={"telegram_code", "telegram_password"},
         )
     try:
-        if args.mtproto_test:
-            py("MTProto test: probes")
+        if args.mproto_login:
+            py("MTProto login: probes")
             ok, dns_info = _dns_lookup("telegram.org")
             py(f"DNS telegram.org: {'ok' if ok else 'fail'} ({dns_info})")
             ok, dns_info = _dns_lookup("api.telegram.org")
@@ -607,14 +615,14 @@ def main() -> int:
 
             run_wait_step("Connect Telegram", client.connect)
             py(f"Connected: {client.is_connected()}")
-            if not client.is_user_authorized():
-                ensure_authorized()
+            ensure_authorized()
             py(f"Authorized: {client.is_user_authorized()}")
             dc_id = getattr(client.session, "dc_id", None)
             server = getattr(client.session, "server_address", None)
             port = getattr(client.session, "port", None)
             if dc_id or server or port:
                 py(f"Session DC: {dc_id} {server}:{port}")
+            update_conf_file(args.config_file, updates=updates)
             return 0
 
         run_wait_step("Connect Telegram", client.connect)
