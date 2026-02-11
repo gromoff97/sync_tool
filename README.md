@@ -4,6 +4,7 @@ Directory `offline/python_wheels` contains all Python packages required for Tele
 
 - `telethon`
 - `colorama`
+- `python-socks`
 - transitive deps: `pyaes`, `rsa`, `pyasn1`
 
 ## Install on an offline machine

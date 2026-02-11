@@ -198,6 +198,7 @@ load_telegram_config() {
   TG_PHONE=""
   TG_CODE=""
   TG_PASSWORD=""
+  TG_PROXY=""
   TG_CAPTION=""
   TG_PYTHON_MIN="3.8"
 
@@ -224,12 +225,16 @@ load_telegram_config() {
       telegram_phone|TELEGRAM_PHONE|phone|PHONE) TG_PHONE="$value" ;;
       telegram_code|TELEGRAM_CODE|code|CODE) TG_CODE="$value" ;;
       telegram_password|TELEGRAM_PASSWORD|password|PASSWORD) TG_PASSWORD="$value" ;;
+      telegram_proxy|TELEGRAM_PROXY|proxy|PROXY) TG_PROXY="$value" ;;
       telegram_caption|TELEGRAM_CAPTION|caption|CAPTION) TG_CAPTION="$value" ;;
       telegram_python_min|TELEGRAM_PYTHON_MIN|python_min|PYTHON_MIN) TG_PYTHON_MIN="$value" ;;
       *) ;;
     esac
   done < "$cfg"
 
+  if looks_like_placeholder "$TG_PROXY"; then
+    TG_PROXY=""
+  fi
   [[ -z "$TG_API_ID" || "$TG_API_ID" =~ ^[0-9]+$ ]] || die "telegram_api_id must be an integer in $cfg"
   [[ "$TG_PYTHON_MIN" =~ ^[0-9]+\.[0-9]+$ ]] || die "telegram_python_min must be MAJOR.MINOR in $cfg"
 }
@@ -398,6 +403,9 @@ send_to_telegram_personal() {
     --file "$file"
     --non-interactive
   )
+  if [[ -n "$TG_PROXY" ]]; then
+    cmd+=(--proxy "$TG_PROXY")
+  fi
   if [[ -n "$TG_SESSION_STRING" ]]; then
     cmd+=(--session-string "$TG_SESSION_STRING")
   fi
@@ -448,6 +456,9 @@ send_mproto_login() {
     --config-file "$config_file"
     --mproto-login
   )
+  if [[ -n "$TG_PROXY" ]]; then
+    cmd+=(--proxy "$TG_PROXY")
+  fi
   if [[ -n "$TG_SESSION_STRING" ]]; then
     cmd+=(--session-string "$TG_SESSION_STRING")
   fi
@@ -527,6 +538,7 @@ Config:
                        telegram_api_id, telegram_api_hash, telegram_to
                        telegram_session or telegram_session_string
                        telegram_phone, telegram_code, telegram_password
+                       telegram_proxy (optional, e.g. socks5://user:pass@host:1080)
                        (code can be entered interactively)
                        telegram_caption, telegram_python_min
                        default caption (if not set): From **machine_name**

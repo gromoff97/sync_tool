@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import traceback
+from urllib.parse import urlparse
 from typing import Callable, Dict, List, Optional, Set, Tuple, TypeVar
 
 
@@ -28,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--to", default="", help="Username, phone, user ID, or Saved Messages")
     parser.add_argument("--file", default="")
     parser.add_argument("--caption", default="")
+    parser.add_argument("--proxy", default="", help="Proxy URL, e.g. socks5://user:pass@host:1080")
     parser.add_argument("--mproto-login", action="store_true", help="Interactive MTProto login and connection test")
     parser.add_argument("--mtproto-test", dest="mproto_login", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values")
@@ -272,6 +274,69 @@ def looks_like_placeholder(value: str) -> bool:
     return v.startswith("REPLACE") or "XXXXXXXX" in v
 
 
+def normalize_proxy(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw or looks_like_placeholder(raw):
+        return ""
+    return raw
+
+
+def parse_proxy(value: str) -> Tuple[Tuple[object, str, int, bool, Optional[str], Optional[str]], str]:
+    raw = normalize_proxy(value)
+    if not raw:
+        raise ValueError("telegram_proxy is empty.")
+    if "://" not in raw:
+        raw = "socks5://" + raw
+
+    parsed = urlparse(raw)
+    scheme = (parsed.scheme or "").lower()
+    host = parsed.hostname
+    port = parsed.port
+    if not scheme or not host or not port:
+        raise ValueError("telegram_proxy must be like socks5://host:port or http://host:port")
+
+    rdns = True
+    if scheme in ("socks5h", "socks4a"):
+        scheme = scheme[:-1]
+        rdns = True
+
+    if scheme not in ("socks5", "socks4", "http"):
+        raise ValueError("telegram_proxy scheme must be socks5, socks4, or http")
+
+    return (scheme, host, int(port), rdns, parsed.username, parsed.password), raw
+
+
+def ensure_proxy_support() -> None:
+    try:
+        import python_socks  # noqa: F401
+        return
+    except Exception:
+        pass
+    try:
+        import socks  # noqa: F401
+        return
+    except Exception:
+        raise ValueError(
+            "telegram_proxy requires python-socks or PySocks. Install with: pip install python-socks"
+        )
+
+
+def format_proxy_for_log(value: str) -> str:
+    raw = normalize_proxy(value)
+    if not raw:
+        return "none"
+    try:
+        if "://" not in raw:
+            raw = "socks5://" + raw
+        parsed = urlparse(raw)
+        scheme = parsed.scheme or "socks5"
+        host = parsed.hostname or "?"
+        port = parsed.port or "?"
+        return f"{scheme}://{host}:{port}"
+    except Exception:
+        return "set"
+
+
 def update_conf_file(path: str, updates: Optional[Dict[str, str]] = None, remove_keys: Optional[Set[str]] = None) -> None:
     if not path:
         return
@@ -479,6 +544,7 @@ def main() -> int:
         _err_detail(f"  to: {args.to or 'unset'}")
         _err_detail(f"  session: {os.path.expanduser(args.session or '~/.sync_tool_telegram')}")
         _err_detail(f"  session_string: {'set' if (args.session_string or '').strip() else 'unset'}")
+        _err_detail(f"  proxy: {format_proxy_for_log(proxy_raw)}")
         _err_detail(f"  timeout: {UPLOAD_TIMEOUT_SECONDS}s")
 
         proxy_env = []
@@ -515,6 +581,9 @@ def main() -> int:
             for line in tb.splitlines():
                 _err_detail(f"    {line}")
 
+    proxy_raw = ""
+    proxy_tuple = None
+
     try:
         py("Telegram settings...")
         api_id_raw = resolve_required("telegram_api_id", args.api_id, "Enter telegram_api_id: ")
@@ -525,6 +594,14 @@ def main() -> int:
 
         api_hash = resolve_required("telegram_api_hash", args.api_hash, "Enter telegram_api_hash: ")
         to_peer = resolve_required("telegram_to", args.to, "Enter telegram_to (@username/phone/id/me): ")
+
+        proxy_raw = normalize_proxy(args.proxy)
+        if args.mproto_login and not proxy_raw and not NON_INTERACTIVE:
+            proxy_raw = prompt_input("Enter telegram_proxy (optional, blank to skip): ")
+        proxy_raw = normalize_proxy(proxy_raw)
+        if proxy_raw:
+            proxy_tuple, proxy_raw = parse_proxy(proxy_raw)
+            ensure_proxy_support()
     except ValueError as exc:
         err(str(exc))
         return 3
@@ -535,6 +612,8 @@ def main() -> int:
         "telegram_api_hash": api_hash,
         "telegram_session": session,
     }
+    if proxy_raw:
+        updates["telegram_proxy"] = proxy_raw
     if to_peer:
         updates["telegram_to"] = to_peer
 
@@ -546,16 +625,22 @@ def main() -> int:
     if session_string:
         session_obj = StringSession(session_string)
 
+    client_kwargs = {
+        "request_retries": 0,
+        "connection_retries": 0,
+        "retry_delay": 0,
+        "auto_reconnect": False,
+        "timeout": 20,
+        "flood_sleep_threshold": 0,
+    }
+    if proxy_tuple:
+        client_kwargs["proxy"] = proxy_tuple
+
     client = TelegramClient(
         session_obj,
         api_id,
         api_hash,
-        request_retries=0,
-        connection_retries=0,
-        retry_delay=0,
-        auto_reconnect=False,
-        timeout=20,
-        flood_sleep_threshold=0,
+        **client_kwargs,
     )
     current_stage = "connect"
 
@@ -600,6 +685,8 @@ def main() -> int:
     try:
         if args.mproto_login:
             py("MTProto login: probes")
+            if proxy_raw:
+                py(f"Proxy: {format_proxy_for_log(proxy_raw)} (TCP probes are direct)")
             ok, dns_info = _dns_lookup("telegram.org")
             py(f"DNS telegram.org: {'ok' if ok else 'fail'} ({dns_info})")
             ok, dns_info = _dns_lookup("api.telegram.org")
@@ -622,7 +709,10 @@ def main() -> int:
             port = getattr(client.session, "port", None)
             if dc_id or server or port:
                 py(f"Session DC: {dc_id} {server}:{port}")
-            update_conf_file(args.config_file, updates=updates)
+            remove_keys = {"telegram_code", "telegram_password"}
+            if not proxy_raw:
+                remove_keys.add("telegram_proxy")
+            update_conf_file(args.config_file, updates=updates, remove_keys=remove_keys)
             return 0
 
         run_wait_step("Connect Telegram", client.connect)
