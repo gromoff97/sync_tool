@@ -139,14 +139,18 @@ strip_quotes() {
 
 expand_user_path() {
   local p="$1"
+  local h="${HOME:-}"
+  if [[ -n "$h" && "$h" == */~ ]]; then
+    h="${h%/~}"
+  fi
   case "$p" in
     "~")
-      [[ -n "${HOME:-}" ]] || die "HOME is not set; cannot expand '~' in config."
-      printf '%s' "$HOME"
+      [[ -n "$h" ]] || die "HOME is not set; cannot expand '~' in config."
+      printf '%s' "$h"
       ;;
     "~/"*)
-      [[ -n "${HOME:-}" ]] || die "HOME is not set; cannot expand '~/' in config."
-      printf '%s' "$HOME/${p#~/}"
+      [[ -n "$h" ]] || die "HOME is not set; cannot expand '~/' in config."
+      printf '%s' "$h/${p#~/}"
       ;;
     *)
       printf '%s' "$p"
