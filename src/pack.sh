@@ -322,8 +322,8 @@ gitpath() { git -C "$1" rev-parse --git-path "$2"; }
 repo_roots_fingerprint() {
   local repo="$1"
   local roots
-  roots="$(git -C "$repo" rev-list --max-parents=0 --all 2>/dev/null | tr -d '\r' | sort)"
-  [[ -n "$roots" ]] || die "Failed to compute repo roots (is the repo shallow or corrupt?)"
+  roots="$(git -C "$repo" rev-list --max-parents=0 --branches --tags 2>/dev/null | tr -d '\r' | sort)"
+  [[ -n "$roots" ]] || die "Failed to compute repo roots (branches/tags)."
   sha256_text "$roots"
 }
 

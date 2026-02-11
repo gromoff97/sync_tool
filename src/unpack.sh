@@ -187,8 +187,16 @@ read_manifest_value() {
 repo_roots_fingerprint() {
   local repo="$1"
   local roots
+  roots="$(git -C "$repo" rev-list --max-parents=0 --branches --tags 2>/dev/null | tr -d '\r' | sort)"
+  [[ -n "$roots" ]] || die "Failed to compute repo roots (branches/tags)."
+  sha256_text "$roots"
+}
+
+repo_roots_fingerprint_all() {
+  local repo="$1"
+  local roots
   roots="$(git -C "$repo" rev-list --max-parents=0 --all 2>/dev/null | tr -d '\r' | sort)"
-  [[ -n "$roots" ]] || die "Failed to compute repo roots (is the repo shallow or corrupt?)"
+  [[ -n "$roots" ]] || return 1
   sha256_text "$roots"
 }
 
@@ -405,7 +413,12 @@ if [[ "$MODE" == "existing" ]]; then
   fi
   local_repo_roots_sha="$(repo_roots_fingerprint "$REPO_DIR")"
   if [[ "$local_repo_roots_sha" != "$expected_repo_roots_sha" ]]; then
-    die "Repository identity mismatch (pack=$expected_repo_roots_sha, local=$local_repo_roots_sha)."
+    local_repo_roots_all_sha="$(repo_roots_fingerprint_all "$REPO_DIR" || true)"
+    if [[ -n "$local_repo_roots_all_sha" && "$local_repo_roots_all_sha" == "$expected_repo_roots_sha" ]]; then
+      warn "Pack identity matched legacy roots (includes remotes). Repack to update identity."
+    else
+      die "Repository identity mismatch (pack=$expected_repo_roots_sha, local=$local_repo_roots_sha)."
+    fi
   fi
 else
   mkdir -p "$TARGET_REPO" || die "Cannot create target directory: $TARGET_REPO"
