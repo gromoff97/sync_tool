@@ -543,16 +543,15 @@ Optional (defaults):
   --pack-prefix PREFIX       (default: syncpack)
   --machine-name NAME        (default: auto-detected; written to manifest only)
   push                       send archive from personal account using <tool_dir>/conf/telegram.conf
-  -s                         same as push (legacy)
   --dry-run                  show what would be done without creating/sending
   --mproto-login             interactive MTProto login + connection test, writes <tool_dir>/conf/telegram.conf
   --help
 
 Config:
   <tool_dir>/conf/pack.conf (if present) overrides pack options above.
-  <tool_dir>/conf/telegram.conf used only with -s.
-                       pack -s is non-interactive for Telegram auth; run --mproto-login to create/refresh telegram.conf.
-                       if telegram_to is missing, pack -s will prompt for it and save for next time.
+  <tool_dir>/conf/telegram.conf used only with push.
+                       push is non-interactive for Telegram auth; run --mproto-login to create/refresh telegram.conf.
+                       if telegram_to is missing, push will prompt for it and save for next time.
                        supported keys:
                        telegram_api_id, telegram_api_hash, telegram_to
                        telegram_session or telegram_session_string
@@ -563,10 +562,10 @@ Config:
                        telegram_caption, telegram_python_min
                        default caption (if not set): Packed by **machine_name**
                        (default python minimum: 3.8)
-                       python modules for -s: telethon, colorama
+                       python modules for push: telethon, colorama
 
 Example:
-  ./pack -s
+  ./pack push
 EOF
   exit 2
 }
@@ -603,7 +602,6 @@ while [[ $# -gt 0 ]]; do
     --pack-prefix=*)   PACK_PREFIX="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     --machine-name)    MACHINE_NAME="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
     --machine-name=*)  MACHINE_NAME="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
-    -s)               SEND_TO_TELEGRAM="1"; OTHER_OPTS_USED="1"; shift 1;;
     --dry-run)         DRY_RUN="1"; shift 1;;
     --mproto-login)    MPROTO_LOGIN="1"; shift 1;;
     --help|-h)         usage;;
