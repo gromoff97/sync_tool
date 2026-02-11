@@ -35,6 +35,18 @@ warn() { printf '%b[WRN]%b %s\n' "$C_WRN" "$C_RESET" "$*" >&2; }
 info() { printf '%b[APP]%b %s\n' "$C_APP" "$C_RESET" "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+detect_machine_name() {
+  local name=""
+  if have hostname; then
+    name="$(hostname 2>/dev/null || true)"
+  fi
+  if [[ -z "$name" ]]; then
+    name="${COMPUTERNAME:-${HOSTNAME:-}}"
+  fi
+  [[ -n "$name" ]] || name="unknown"
+  printf '%s' "$name"
+}
+
 require_tools() {
   have git  || die "git not found"
   have tar  || die "tar not found"
@@ -97,6 +109,11 @@ strip_quotes() {
     fi
   fi
   printf '%s' "$s"
+}
+
+looks_like_placeholder() {
+  local v="${1^^}"
+  [[ "$v" == REPLACE* || "$v" == *XXXXXXXX* ]]
 }
 
 expand_user_path() {
@@ -162,6 +179,7 @@ load_telegram_config() {
   TG_CODE=""
   TG_PASSWORD=""
   TG_PROXY=""
+  TG_ACK_TEXT="Unpacked by"
   TG_PYTHON_MIN="3.8"
 
   [[ -f "$cfg" ]] || return 0
@@ -188,11 +206,15 @@ load_telegram_config() {
       telegram_code|TELEGRAM_CODE|code|CODE) TG_CODE="$value" ;;
       telegram_password|TELEGRAM_PASSWORD|password|PASSWORD) TG_PASSWORD="$value" ;;
       telegram_proxy|TELEGRAM_PROXY|proxy|PROXY) TG_PROXY="$value" ;;
+      telegram_ack_text|TELEGRAM_ACK_TEXT|ack_text|ACK_TEXT) TG_ACK_TEXT="$value" ;;
       telegram_python_min|TELEGRAM_PYTHON_MIN|python_min|PYTHON_MIN) TG_PYTHON_MIN="$value" ;;
       *) ;;
     esac
   done < "$cfg"
 
+  if looks_like_placeholder "$TG_ACK_TEXT"; then
+    TG_ACK_TEXT="Unpacked by"
+  fi
   [[ -z "$TG_API_ID" || "$TG_API_ID" =~ ^[0-9]+$ ]] || die "telegram_api_id must be an integer in $cfg"
   [[ "$TG_PYTHON_MIN" =~ ^[0-9]+\.[0-9]+$ ]] || die "telegram_python_min must be MAJOR.MINOR in $cfg"
 }
@@ -331,7 +353,7 @@ select_python_for_telegram() {
 }
 
 download_pack_from_telegram() {
-  local out_dir="$1" prefix="$2" project="$3" config_file="$4"
+  local out_dir="$1" prefix="$2" project="$3" config_file="$4" machine_name="$5" ack_text="$6"
   local -a py_cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -361,6 +383,8 @@ download_pack_from_telegram() {
     --pack-prefix "$prefix"
     --project-name "$project"
     --path-file "$path_file"
+    --machine-name "$machine_name"
+    --ack-text "$ack_text"
   )
   if [[ -n "$TG_PROXY" ]]; then
     cmd+=(--proxy "$TG_PROXY")
@@ -538,7 +562,8 @@ Config:
     ff_only, force_tags, prune_remote_refs, prune_local_branches, clean_peer_refs
   <tool_dir>/conf/telegram.conf used only with pull.
     supported keys: telegram_api_id, telegram_api_hash, telegram_from (optional),
-                    telegram_session/session_string, telegram_proxy, telegram_python_min
+                    telegram_session/session_string, telegram_proxy, telegram_python_min,
+                    telegram_ack_text (default: "Unpacked by")
 
 Example:
   ./unpack --pack-dir /c/Work/in
@@ -635,8 +660,9 @@ if [[ "$PULL_MODE" == "1" ]]; then
   TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
   load_telegram_config "$TELEGRAM_CONFIG_FILE"
   require_telegram_config "$TELEGRAM_CONFIG_FILE"
+  MACHINE_NAME="$(detect_machine_name)"
   info "Telegram pull..."
-  download_pack_from_telegram "$PACK_DIR" "$PACK_PREFIX" "$PROJECT_NAME" "$TELEGRAM_CONFIG_FILE"
+  download_pack_from_telegram "$PACK_DIR" "$PACK_PREFIX" "$PROJECT_NAME" "$TELEGRAM_CONFIG_FILE" "$MACHINE_NAME" "$TG_ACK_TEXT"
   PACK_FILE="$PACK_FILE_OVERRIDE"
 elif [[ -n "$PACK_FILE_OVERRIDE" ]]; then
   PACK_FILE="$PACK_FILE_OVERRIDE"

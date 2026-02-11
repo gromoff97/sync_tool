@@ -37,6 +37,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project-name", default="")
     parser.add_argument("--path-file", default="")
     parser.add_argument("--scan-limit", type=int, default=200)
+    parser.add_argument("--require-ack", action="store_true")
+    parser.add_argument("--ack-text", default="Unpacked by")
+    parser.add_argument("--machine-name", default="")
     parser.add_argument("--mproto-login", action="store_true", help="Interactive MTProto login and connection test")
     parser.add_argument("--mtproto-test", dest="mproto_login", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values")
@@ -370,6 +373,13 @@ def extract_pack_timestamp(name: str) -> str:
     return m.group(1)
 
 
+def _unpack_ack_text(text: str, machine: str) -> str:
+    base = (text or "Unpacked by").strip()
+    if machine:
+        return f"{base} {machine}"
+    return base
+
+
 def update_conf_file(path: str, updates: Optional[Dict[str, str]] = None, remove_keys: Optional[Set[str]] = None) -> None:
     if not path:
         return
@@ -589,6 +599,7 @@ def main() -> int:
         _err_detail(f"  session_string: {'set' if (args.session_string or '').strip() else 'unset'}")
         _err_detail(f"  proxy: {format_proxy_for_log(proxy_raw)}")
         _err_detail(f"  timeout: {UPLOAD_TIMEOUT_SECONDS}s")
+        _err_detail(f"  ack_required: {args.require_ack}")
 
         proxy_env = []
         for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
@@ -835,6 +846,13 @@ def main() -> int:
 
             if args.config_file and from_peer:
                 update_conf_file(args.config_file, updates={"telegram_from": from_peer})
+
+            ack_text = _unpack_ack_text(args.ack_text, args.machine_name)
+            if ack_text:
+                run_wait_step(
+                    "Send unpack ack",
+                    lambda: client.send_message(entity, ack_text, reply_to=best_msg.id),
+                )
             return 0
 
         run_wait_step("Connect Telegram", client.connect)
@@ -845,6 +863,40 @@ def main() -> int:
             except ValueError as exc:
                 err(str(exc))
                 return 3
+
+        if args.require_ack:
+            if not args.pack_prefix or not args.project_name:
+                err("--require-ack requires --pack-prefix and --project-name")
+                return 3
+            pattern = re.compile(
+                rf"^{re.escape(args.pack_prefix)}_{re.escape(args.project_name)}_([0-9]{{8}}_[0-9]{{6}})\.tgz$"
+            )
+            latest_pack = None
+            latest_pack_ts = ""
+            ack_text = (args.ack_text or "Unpacked by").strip()
+            ack_reply_ids = set()
+            saw_ack_after = False
+            for msg in client.iter_messages(to_peer, limit=args.scan_limit):
+                if msg and msg.message and ack_text and msg.message.startswith(ack_text):
+                    if getattr(msg, "reply_to_msg_id", None):
+                        ack_reply_ids.add(msg.reply_to_msg_id)
+                    saw_ack_after = True
+                    continue
+                if not msg or not msg.file:
+                    continue
+                name = getattr(msg.file, "name", "") or ""
+                m = pattern.match(name)
+                if not m:
+                    continue
+                ts = m.group(1)
+                if ts > latest_pack_ts:
+                    latest_pack_ts = ts
+                    latest_pack = msg
+                    break
+
+            if latest_pack and not (saw_ack_after or latest_pack.id in ack_reply_ids):
+                err("Previous pack not acknowledged yet. Wait for 'Unpacked by ...' reply.")
+                return 4
 
         current_stage = "upload"
         progress_cb, progress_suffix = make_upload_progress_logger()
