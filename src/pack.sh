@@ -195,6 +195,7 @@ load_telegram_config() {
   TG_PASSWORD=""
   TG_CAPTION=""
   TG_PYTHON_MIN="3.8"
+  TG_PYTHON_BIN=""
 
   [[ -f "$cfg" ]] || return 0
 
@@ -221,6 +222,7 @@ load_telegram_config() {
       telegram_password|TELEGRAM_PASSWORD|password|PASSWORD) TG_PASSWORD="$value" ;;
       telegram_caption|TELEGRAM_CAPTION|caption|CAPTION) TG_CAPTION="$value" ;;
       telegram_python_min|TELEGRAM_PYTHON_MIN|python_min|PYTHON_MIN) TG_PYTHON_MIN="$value" ;;
+      telegram_python|TELEGRAM_PYTHON|python_bin|PYTHON_BIN) TG_PYTHON_BIN="$value" ;;
       *) ;;
     esac
   done < "$cfg"
@@ -231,21 +233,23 @@ load_telegram_config() {
 
 python_version_at_least() {
   local py_bin="$1" min_major="$2" min_minor="$3"
-  "$py_bin" - "$min_major" "$min_minor" >/dev/null 2>&1 <<'PY'
-import sys
-min_major = int(sys.argv[1])
-min_minor = int(sys.argv[2])
-sys.exit(0 if (sys.version_info.major, sys.version_info.minor) >= (min_major, min_minor) else 1)
-PY
+  "$py_bin" -c 'import sys; min_major=int(sys.argv[1]); min_minor=int(sys.argv[2]); sys.exit(0 if (sys.version_info.major, sys.version_info.minor) >= (min_major, min_minor) else 1)' "$min_major" "$min_minor" >/dev/null 2>&1
 }
 
 python_module_available() {
   local py_bin="$1" module="$2"
-  "$py_bin" - "$module" >/dev/null 2>&1 <<'PY'
-import importlib
-import sys
-importlib.import_module(sys.argv[1])
-PY
+  "$py_bin" -c 'import importlib,sys; importlib.import_module(sys.argv[1])' "$module" >/dev/null 2>&1
+}
+
+python_exec_path() {
+  local py_bin="$1"
+  local out
+  out="$("$py_bin" -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
+  if [[ -n "$out" ]]; then
+    printf '%s' "$out"
+  else
+    printf '%s' "$py_bin"
+  fi
 }
 
 select_python_for_telegram() {
@@ -254,7 +258,16 @@ select_python_for_telegram() {
   local min_minor="${min_ver##*.}"
   local py_bin
 
-  for py_bin in python3 python; do
+  if [[ -n "${TG_PYTHON_BIN:-}" ]]; then
+    py_bin="$TG_PYTHON_BIN"
+    if python_version_at_least "$py_bin" "$min_major" "$min_minor"; then
+      printf '%s' "$py_bin"
+      return 0
+    fi
+    die "telegram_python is not usable (need Python >= $min_ver): $py_bin"
+  fi
+
+  for py_bin in python3 python py; do
     if have "$py_bin" && python_version_at_least "$py_bin" "$min_major" "$min_minor"; then
       printf '%s' "$py_bin"
       return 0
@@ -268,6 +281,7 @@ send_to_telegram_personal() {
   local file="$1" caption="$2" config_file="$3"
   local py_bin
   py_bin="$(select_python_for_telegram "$TG_PYTHON_MIN")"
+  log_pack "Telegram python: $(python_exec_path "$py_bin")"
   python_module_available "$py_bin" "telethon" || die "Python module 'telethon' is not installed for $py_bin. Install it before using -s."
   python_module_available "$py_bin" "colorama" || die "Python module 'colorama' is not installed for $py_bin. Install it before using -s."
 
@@ -321,6 +335,7 @@ send_mtproto_test() {
   local config_file="$1"
   local py_bin
   py_bin="$(select_python_for_telegram "$TG_PYTHON_MIN")"
+  log_pack "Telegram python: $(python_exec_path "$py_bin")"
   python_module_available "$py_bin" "telethon" || die "Python module 'telethon' is not installed for $py_bin. Install it before using --mtproto-test."
   python_module_available "$py_bin" "colorama" || die "Python module 'colorama' is not installed for $py_bin. Install it before using --mtproto-test."
 
@@ -426,6 +441,7 @@ Config:
                        telegram_phone, telegram_code, telegram_password
                        (code can be entered interactively)
                        telegram_caption, telegram_python_min
+                       telegram_python (optional explicit python path/command)
                        default caption (if not set): From **machine_name**
                        (default python minimum: 3.8)
                        python modules for -s: telethon, colorama
