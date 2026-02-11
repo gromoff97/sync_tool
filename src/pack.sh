@@ -96,6 +96,13 @@ detect_machine_name() {
   printf '%s' "$name"
 }
 
+is_within_repo() {
+  local repo="$1" path="$2"
+  repo="${repo%/}/"
+  path="${path%/}/"
+  [[ "$path" == "$repo"* ]]
+}
+
 sanitize_for_manifest() {
   # just strip CR/LF; keep the rest as-is (manifest is text)
   local s="$1"
@@ -204,6 +211,10 @@ load_telegram_config() {
   TG_ACK_SCAN_LIMIT="32"
   TG_CAPTION=""
   TG_PYTHON_MIN="3.8"
+  STATE_FILE=""
+  STATE_LAST_FILE=""
+  STATE_LAST_TS=""
+  STATE_SAVE_PENDING="0"
 
   [[ -f "$cfg" ]] || return 0
 
@@ -242,6 +253,30 @@ load_telegram_config() {
   [[ -z "$TG_API_ID" || "$TG_API_ID" =~ ^[0-9]+$ ]] || die "telegram_api_id must be an integer in $cfg"
   [[ "$TG_PYTHON_MIN" =~ ^[0-9]+\.[0-9]+$ ]] || die "telegram_python_min must be MAJOR.MINOR in $cfg"
   [[ "$TG_ACK_SCAN_LIMIT" =~ ^[0-9]+$ ]] || die "telegram_ack_scan_limit must be an integer in $cfg"
+}
+
+load_push_state() {
+  [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]] || return 0
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    raw="${raw%$'\r'}"
+    [[ -n "$raw" && "$raw" == *=* ]] || continue
+    key="${raw%%=*}"
+    value="${raw#*=}"
+    case "$key" in
+      last_file) STATE_LAST_FILE="$value" ;;
+      last_ts) STATE_LAST_TS="$value" ;;
+      *) ;;
+    esac
+  done < "$STATE_FILE"
+}
+
+save_push_state() {
+  [[ -n "$STATE_FILE" ]] || return 0
+  mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null || true
+  {
+    [[ -n "$STATE_LAST_FILE" ]] && echo "last_file=$STATE_LAST_FILE"
+    [[ -n "$STATE_LAST_TS" ]] && echo "last_ts=$STATE_LAST_TS"
+  } > "$STATE_FILE"
 }
 
 require_telegram_config() {
@@ -579,6 +614,10 @@ TG_SESSION=""
 TG_CAPTION=""
 final_path=""
 DELETE_FINAL_ON_EXIT="0"
+STATE_FILE=""
+STATE_LAST_FILE=""
+STATE_LAST_TS=""
+STATE_SAVE_PENDING="0"
 
 while [[ $# -gt 0 ]]; do
   if [[ "$1" == "push" ]]; then
@@ -645,6 +684,9 @@ PROJECT_NAME="$(basename "$REPO_DIR")"
 PROJECT_NAME="$(sanitize_for_manifest "$PROJECT_NAME")"
 
 mkdir -p "$OUTPUT_DIR" || die "Cannot create --output-dir: $OUTPUT_DIR"
+if is_within_repo "$REPO_DIR" "$OUTPUT_DIR"; then
+  die "Refusing to write packs inside the repository. Use --output-dir outside repo."
+fi
 ensure_repo_ok_and_clean "$REPO_DIR"
 log_pack "Repo: $REPO_DIR | Project: $PROJECT_NAME"
 log_pack "Out: $OUTPUT_DIR"
@@ -719,6 +761,7 @@ mv -f "$tmp_out" "$final_path" || die "Cannot move archive to output dir"
 
 if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
   TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
+  STATE_FILE="$TOOL_DIR/conf/push.state"
   load_telegram_config "$TELEGRAM_CONFIG_FILE"
   require_telegram_config "$TELEGRAM_CONFIG_FILE"
   if looks_like_placeholder "$TG_TO"; then
@@ -735,12 +778,24 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
     TG_CAPTION="Packed by **$(escape_md "$MACHINE_NAME")**"
   fi
 
+  load_push_state
+  if [[ -n "$STATE_LAST_FILE" && "$STATE_LAST_FILE" == "$final" ]]; then
+    die "This pack was already pushed: $final"
+  fi
+  if [[ -n "$STATE_LAST_TS" && "$ts" < "$STATE_LAST_TS" ]]; then
+    die "Pack timestamp is older than last pushed ($STATE_LAST_TS)."
+  fi
+
   log_pack "Telegram send..."
   DELETE_FINAL_ON_EXIT="1"
   send_to_telegram_personal "$final_path" "$TG_CAPTION" "$TELEGRAM_CONFIG_FILE"
   rm -f -- "$final_path" || die "Uploaded to Telegram, but failed to delete local pack: $final_path"
   DELETE_FINAL_ON_EXIT="0"
   log_ok "Removed: $final_path"
+
+  STATE_LAST_FILE="$final"
+  STATE_LAST_TS="$ts"
+  save_push_state
 else
   log_ok "Pack: $final_path"
 fi
