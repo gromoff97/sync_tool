@@ -4,7 +4,7 @@ Directory `offline/python_wheels` contains all Python packages required for Tele
 
 - `telethon`
 - `colorama`
-- `python-socks`
+- `python-socks` (required only when `telegram_proxy` is used)
 - transitive deps: `pyaes`, `rsa`, `pyasn1`
 
 ## Install on an offline machine
@@ -13,7 +13,7 @@ Run from project root:
 
 ```bash
 python -m ensurepip --upgrade
-python -m pip install --no-index --find-links offline/python_wheels telethon colorama
+python -m pip install --no-index --find-links offline/python_wheels telethon colorama python-socks
 ```
 
 ## Quick check
