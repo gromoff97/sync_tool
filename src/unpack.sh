@@ -550,22 +550,22 @@ If run inside a git repository, updates that repository.
 If run outside a git repository, creates a new repository from the latest pack.
 
 Options:
-  --pack-dir PATH           default: ~/syncpacks
-  --pack-file PATH          use a specific pack file instead of scanning pack-dir
-  --pack-prefix PREFIX      default: syncpack
-  --project-name NAME       default: autodetect from current repo or selected pack
-  --peer NAME               default: sync
-  --dry-run                 show what would be done without applying
-  --ff-only 0|1             default: 1
-  --force-tags 0|1          default: 0
-  --prune-remote-refs 0|1   default: 1
-  --prune-local-branches 0|1 default: 0
-  --clean-peer-refs 0|1     default: 1 (remove refs/remotes/<peer>/*)
+  --pack-dir PATH              default: ~/syncpacks
+  --pack-file PATH             use a specific pack file instead of scanning pack-dir
+  --pack-prefix PREFIX         default: syncpack
+  --project-name NAME          default: autodetect from current repo or selected pack
+  --peer NAME                  default: sync
+  --dry-run                    show what would be done without applying
+  --ff-only 0|1                default: 1
+  --force-tags 0|1             default: 0
+  --prune-remote-refs 0|1      default: 1
+  --prune-local-branches 0|1   default: 0
+  --clean-peer-refs 0|1        default: 1 (remove refs/remotes/<peer>/*)
   --help
 
 Subcommands:
-  pull                      download latest pack from Telegram and apply it
-                            (see: unpack pull --help)
+  pull                         download latest pack from Telegram and apply it
+                               (see: unpack pull --help)
 
 Config:
   <tool_dir>/conf/unpack.conf (if present) overrides CLI options.
@@ -584,11 +584,11 @@ usage_pull() {
 unpack pull — download latest pack from Telegram and apply it
 
 Options (same as unpack):
-  --pack-dir PATH           default: ~/syncpacks
-  --pack-prefix PREFIX      default: syncpack
-  --project-name NAME       default: autodetect from current repo or selected pack
-  --peer NAME               default: sync
-  --dry-run                 show what would be done without applying
+  --pack-dir PATH              default: ~/syncpacks
+  --pack-prefix PREFIX         default: syncpack
+  --project-name NAME          default: autodetect from current repo or selected pack
+  --peer NAME                  default: sync
+  --dry-run                    show what would be done without applying
   --help
 
 Config:

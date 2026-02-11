@@ -539,15 +539,15 @@ pack.sh — create FULL git bundle pack (all branches + tags) into a .tgz
 File name: <prefix>_<project>_<timestamp>.tgz
 
 Options:
-  --output-dir PATH      default: ~/syncpacks
-  --pack-prefix PREFIX   default: syncpack
-  --machine-name NAME    default: auto-detected; written to manifest only
-  --dry-run              show what would be done without creating/sending
-  --mproto-login         interactive MTProto login + connection test, writes <tool_dir>/conf/telegram.conf
+  --output-dir PATH        default: ~/syncpacks
+  --pack-prefix PREFIX     default: syncpack
+  --machine-name NAME      default: auto-detected; written to manifest only
+  --dry-run                show what would be done without creating/sending
+  --mproto-login           interactive MTProto login + connection test, writes <tool_dir>/conf/telegram.conf
   --help
 
 Subcommands:
-  push                   send archive via Telegram (see: pack push --help)
+  push                     send archive via Telegram (see: pack push --help)
 
 Config:
   <tool_dir>/conf/pack.conf (if present) overrides pack options above.
@@ -564,10 +564,10 @@ usage_push() {
 pack push — send the created pack via Telegram (personal account)
 
 Options (same as pack):
-  --output-dir PATH      default: ~/syncpacks
-  --pack-prefix PREFIX   default: syncpack
-  --machine-name NAME    default: auto-detected; written to manifest only
-  --dry-run              show what would be done without creating/sending
+  --output-dir PATH        default: ~/syncpacks
+  --pack-prefix PREFIX     default: syncpack
+  --machine-name NAME      default: auto-detected; written to manifest only
+  --dry-run                show what would be done without creating/sending
   --help
 
 Config:
