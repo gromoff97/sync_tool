@@ -252,6 +252,11 @@ python_exec_path_cmd() {
   fi
 }
 
+py_launcher_paths() {
+  have py || return 0
+  py -0p 2>/dev/null | tr -d '\r' | awk 'NF{ $1=""; if ($2=="*") $2=""; sub(/^ +/,""); print }'
+}
+
 select_python_for_telegram() {
   local min_ver="$1"
   shift
@@ -280,10 +285,28 @@ select_python_for_telegram() {
     fi
   done
 
+  while IFS= read -r cand; do
+    [[ -n "$cand" ]] || continue
+    cmd=("$cand")
+    python_version_at_least_cmd "$min_major" "$min_minor" "${cmd[@]}" || continue
+    local ok="1"
+    local m
+    for m in "${required[@]}"; do
+      if ! python_module_available_cmd "$m" "${cmd[@]}"; then
+        ok="0"
+        break
+      fi
+    done
+    if [[ "$ok" == "1" ]]; then
+      PY_CMD=("${cmd[@]}")
+      return 0
+    fi
+  done < <(py_launcher_paths)
+
   if [[ "${#required[@]}" -gt 0 ]]; then
-    die "Python >= $min_ver with modules (${required[*]}) not found in PATH."
+    die "Python >= $min_ver with modules (${required[*]}) not found in PATH or py launcher list."
   fi
-  die "Python >= $min_ver not found in PATH."
+  die "Python >= $min_ver not found in PATH or py launcher list."
 }
 
 send_to_telegram_personal() {
