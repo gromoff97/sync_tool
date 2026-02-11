@@ -244,8 +244,7 @@ require_telegram_config() {
   [[ -f "$cfg" ]] || die "telegram.conf not found. Run: pack --mproto-login"
   [[ -n "$TG_API_ID" ]] || die "telegram_api_id missing in $cfg. Run: pack --mproto-login"
   [[ -n "$TG_API_HASH" ]] || die "telegram_api_hash missing in $cfg. Run: pack --mproto-login"
-  [[ -n "$TG_TO" ]] || die "telegram_to missing in $cfg. Run: pack --mproto-login"
-  if looks_like_placeholder "$TG_API_ID" || looks_like_placeholder "$TG_API_HASH" || looks_like_placeholder "$TG_TO"; then
+  if looks_like_placeholder "$TG_API_ID" || looks_like_placeholder "$TG_API_HASH"; then
     die "telegram.conf has placeholder values. Run: pack --mproto-login"
   fi
 }
@@ -533,7 +532,8 @@ Optional (defaults):
 Config:
   <tool_dir>/conf/pack.conf (if present) overrides pack options above.
   <tool_dir>/conf/telegram.conf used only with -s.
-                       pack -s is non-interactive; run --mproto-login to create/refresh telegram.conf.
+                       pack -s is non-interactive for Telegram auth; run --mproto-login to create/refresh telegram.conf.
+                       if telegram_to is missing, pack -s will prompt for it and save for next time.
                        supported keys:
                        telegram_api_id, telegram_api_hash, telegram_to
                        telegram_session or telegram_session_string
@@ -703,6 +703,16 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
   TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
   load_telegram_config "$TELEGRAM_CONFIG_FILE"
   require_telegram_config "$TELEGRAM_CONFIG_FILE"
+  if looks_like_placeholder "$TG_TO"; then
+    TG_TO=""
+  fi
+  if [[ -z "$TG_TO" ]]; then
+    if [[ -t 0 ]]; then
+      read -r -p "Enter telegram_to (@username/phone/id/me): " TG_TO
+      TG_TO="$(trim_ws "$TG_TO")"
+    fi
+  fi
+  [[ -n "$TG_TO" ]] || die "telegram_to is required. Set it in telegram.conf or enter it interactively."
   if [[ -z "$TG_CAPTION" ]]; then
     TG_CAPTION="From **$(escape_md "$MACHINE_NAME")**"
   fi

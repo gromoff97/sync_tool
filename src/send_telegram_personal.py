@@ -593,7 +593,10 @@ def main() -> int:
         api_id = int(api_id_raw)
 
         api_hash = resolve_required("telegram_api_hash", args.api_hash, "Enter telegram_api_hash: ")
-        to_peer = resolve_required("telegram_to", args.to, "Enter telegram_to (@username/phone/id/me): ")
+        if args.mproto_login:
+            to_peer = (args.to or "").strip()
+        else:
+            to_peer = resolve_required("telegram_to", args.to, "Enter telegram_to (@username/phone/id/me): ")
 
         proxy_raw = normalize_proxy(args.proxy)
         if args.mproto_login and not proxy_raw and not NON_INTERACTIVE:
@@ -739,6 +742,8 @@ def main() -> int:
             status_suffix=progress_suffix,
         )
         py("Upload done.")
+        if args.config_file and to_peer:
+            update_conf_file(args.config_file, updates={"telegram_to": to_peer})
     except KeyboardInterrupt:
         err("Interrupted by user.")
         return 130
