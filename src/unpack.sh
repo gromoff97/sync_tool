@@ -388,6 +388,8 @@ info "Project: $PROJECT_NAME"
 info "Peer: $PEER"
 if [[ "$MODE" == "bootstrap" ]]; then
   info "Create repo: $TARGET_REPO"
+else
+  info "Repo: $REPO_DIR"
 fi
 
 tmp="$(mktemp_dir)"
@@ -418,6 +420,7 @@ fi
 expected_bundle_sha="$(read_manifest_value "$manifest" bundle_sha256 || true)"
 if [[ -n "${expected_bundle_sha:-}" ]]; then
   actual_bundle_sha="$(sha256_file "$bundle")"
+  info "Bundle SHA256: pack=$expected_bundle_sha local=$actual_bundle_sha"
   [[ "$actual_bundle_sha" == "$expected_bundle_sha" ]] || die "Bundle SHA256 mismatch (corrupted transfer?)"
 else
   warn "No bundle_sha256 in manifest (skipping integrity check)"
@@ -429,8 +432,12 @@ if [[ "$MODE" == "existing" ]]; then
     die "Pack missing repo_roots_sha256. Recreate pack with updated pack.sh."
   fi
   local_repo_roots_sha="$(repo_roots_fingerprint "$REPO_DIR")"
+  info "Repo roots SHA256: pack=$expected_repo_roots_sha local=$local_repo_roots_sha"
   if [[ "$local_repo_roots_sha" != "$expected_repo_roots_sha" ]]; then
     local_repo_roots_all_sha="$(repo_roots_fingerprint_all "$REPO_DIR" || true)"
+    if [[ -n "$local_repo_roots_all_sha" ]]; then
+      info "Repo roots SHA256 (all refs): local=$local_repo_roots_all_sha"
+    fi
     if [[ -n "$local_repo_roots_all_sha" && "$local_repo_roots_all_sha" == "$expected_repo_roots_sha" ]]; then
       warn "Pack identity matched legacy roots (includes remotes). Repack to update identity."
     else
@@ -508,6 +515,8 @@ if [[ "$MODE" == "existing" ]]; then
       info "Pack deleted: $PACK_FILE"
     fi
     exit 0
+  else
+    info "Changes detected: pack differs from local refs."
   fi
 fi
 
