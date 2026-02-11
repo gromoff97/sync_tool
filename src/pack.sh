@@ -253,8 +253,36 @@ python_exec_path_cmd() {
 }
 
 py_launcher_paths() {
-  have py || return 0
-  py -0p 2>/dev/null | tr -d '\r' | awk 'NF{ $1=""; if ($2=="*") $2=""; sub(/^ +/,""); print }'
+  local py_cmd="py"
+  if ! have "$py_cmd"; then
+    if [[ -x "/c/Windows/py.exe" ]]; then
+      py_cmd="/c/Windows/py.exe"
+    else
+      return 0
+    fi
+  fi
+  "$py_cmd" -0p 2>/dev/null | tr -d '\r' | awk 'NF{ $1=""; if ($2=="*") $2=""; sub(/^ +/,""); print }'
+}
+
+python_candidates_from_globs() {
+  local home="${HOME:-}"
+  local -a globs=()
+  if [[ -n "$home" ]]; then
+    globs+=("$home/AppData/Local/Programs/Python/Python*/python.exe")
+    globs+=("$home/AppData/Local/Microsoft/WindowsApps/python.exe")
+  fi
+  globs+=("/c/Program Files/Python*/python.exe")
+  globs+=("/c/Program Files (x86)/Python*/python.exe")
+  globs+=("/c/Python*/python.exe")
+
+  shopt -s nullglob
+  local g p
+  for g in "${globs[@]}"; do
+    for p in $g; do
+      printf '%s\n' "$p"
+    done
+  done
+  shopt -u nullglob
 }
 
 select_python_for_telegram() {
@@ -303,10 +331,28 @@ select_python_for_telegram() {
     fi
   done < <(py_launcher_paths)
 
+  while IFS= read -r cand; do
+    [[ -n "$cand" ]] || continue
+    cmd=("$cand")
+    python_version_at_least_cmd "$min_major" "$min_minor" "${cmd[@]}" || continue
+    local ok="1"
+    local m
+    for m in "${required[@]}"; do
+      if ! python_module_available_cmd "$m" "${cmd[@]}"; then
+        ok="0"
+        break
+      fi
+    done
+    if [[ "$ok" == "1" ]]; then
+      PY_CMD=("${cmd[@]}")
+      return 0
+    fi
+  done < <(python_candidates_from_globs)
+
   if [[ "${#required[@]}" -gt 0 ]]; then
-    die "Python >= $min_ver with modules (${required[*]}) not found in PATH or py launcher list."
+    die "Python >= $min_ver with modules (${required[*]}) not found in PATH, py launcher list, or common install dirs."
   fi
-  die "Python >= $min_ver not found in PATH or py launcher list."
+  die "Python >= $min_ver not found in PATH, py launcher list, or common install dirs."
 }
 
 send_to_telegram_personal() {
