@@ -543,38 +543,61 @@ project_from_pack_name() {
   return 1
 }
 
-usage() {
+usage_main() {
   cat >&2 <<'EOF'
 unpack.sh — apply latest .tgz pack from a directory, update ALL branches + tags
 If run inside a git repository, updates that repository.
 If run outside a git repository, creates a new repository from the latest pack.
 
-Optional (defaults):
-  pull                       download latest pack from Telegram and apply it
-  --pack-dir PATH             (default: ~/syncpacks)
-  --pack-file PATH            (use a specific pack file instead of scanning pack-dir)
-  --pack-prefix PREFIX         (default: syncpack)
-  --project-name NAME          (default: autodetect from current repo or selected pack)
-  --peer NAME                  (default: sync)
-  --dry-run                    show what would be done without applying
-  --ff-only 0|1                (default: 1)
-  --force-tags 0|1             (default: 0)
-  --prune-remote-refs 0|1      (default: 1)
-  --prune-local-branches 0|1   (default: 0)
-  --clean-peer-refs 0|1        (default: 1) remove refs/remotes/<peer>/*
+Options:
+  --pack-dir PATH           default: ~/syncpacks
+  --pack-file PATH          use a specific pack file instead of scanning pack-dir
+  --pack-prefix PREFIX      default: syncpack
+  --project-name NAME       default: autodetect from current repo or selected pack
+  --peer NAME               default: sync
+  --dry-run                 show what would be done without applying
+  --ff-only 0|1             default: 1
+  --force-tags 0|1          default: 0
+  --prune-remote-refs 0|1   default: 1
+  --prune-local-branches 0|1 default: 0
+  --clean-peer-refs 0|1     default: 1 (remove refs/remotes/<peer>/*)
   --help
+
+Subcommands:
+  pull                      download latest pack from Telegram and apply it
+                            (see: unpack pull --help)
 
 Config:
   <tool_dir>/conf/unpack.conf (if present) overrides CLI options.
-  Supported keys include:
-    pack_dir, pack_prefix, project_name, peer,
-    ff_only, force_tags, prune_remote_refs, prune_local_branches, clean_peer_refs
-  <tool_dir>/conf/telegram.conf used only with pull.
-    supported keys: telegram_api_id, telegram_api_hash, telegram_from (optional),
-                    telegram_session/session_string, telegram_proxy, telegram_python_min
+  Keys: pack_dir, pack_prefix, project_name, peer,
+        ff_only, force_tags, prune_remote_refs, prune_local_branches, clean_peer_refs
 
 Example:
   ./unpack --pack-dir /c/Work/in
+  ./unpack pull
+EOF
+  exit 2
+}
+
+usage_pull() {
+  cat >&2 <<'EOF'
+unpack pull — download latest pack from Telegram and apply it
+
+Options (same as unpack):
+  --pack-dir PATH           default: ~/syncpacks
+  --pack-prefix PREFIX      default: syncpack
+  --project-name NAME       default: autodetect from current repo or selected pack
+  --peer NAME               default: sync
+  --dry-run                 show what would be done without applying
+  --help
+
+Config:
+  <tool_dir>/conf/telegram.conf is required for pull.
+  Supported keys: telegram_api_id, telegram_api_hash, telegram_from (optional),
+                  telegram_session/session_string, telegram_proxy, telegram_python_min
+
+Example:
+  ./unpack pull
 EOF
   exit 2
 }
@@ -603,6 +626,18 @@ FORCE_TAGS="0"
 PRUNE_REMOTE_REFS="1"
 PRUNE_LOCAL_BRANCHES="0"
 CLEAN_PEER_REFS="1"
+
+want_pull_help="0"
+want_help="0"
+for _a in "$@"; do
+  case "$_a" in
+    pull) want_pull_help="1" ;;
+    --help|-h) want_help="1" ;;
+  esac
+done
+if [[ "$want_pull_help" == "1" && "$want_help" == "1" ]]; then
+  usage_pull
+fi
 
 while [[ $# -gt 0 ]]; do
   if [[ "$1" == "pull" ]]; then
@@ -635,7 +670,7 @@ while [[ $# -gt 0 ]]; do
     --clean-peer-refs=*)      CLEAN_PEER_REFS="${1#*=}"; shift 1;;
     --dry-run)                DRY_RUN="1"; shift 1;;
 
-    --help|-h)                usage;;
+    --help|-h)                usage_main;;
     *) die "Unknown option: $1 (use --help)";;
   esac
 done

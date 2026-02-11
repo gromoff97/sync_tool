@@ -533,39 +533,60 @@ ensure_repo_ok_and_clean() {
   [[ -z "$st" ]] || die "Repo has uncommitted/untracked changes. Commit/stash first."
 }
 
-usage() {
+usage_main() {
   cat >&2 <<'EOF'
 pack.sh — create FULL git bundle pack (all branches + tags) into a .tgz
 File name: <prefix>_<project>_<timestamp>.tgz
 
-Optional (defaults):
-  --output-dir PATH          (default: ~/syncpacks)
-  --pack-prefix PREFIX       (default: syncpack)
-  --machine-name NAME        (default: auto-detected; written to manifest only)
-  push                       send archive from personal account using <tool_dir>/conf/telegram.conf
-  --dry-run                  show what would be done without creating/sending
-  --mproto-login             interactive MTProto login + connection test, writes <tool_dir>/conf/telegram.conf
+Options:
+  --output-dir PATH      default: ~/syncpacks
+  --pack-prefix PREFIX   default: syncpack
+  --machine-name NAME    default: auto-detected; written to manifest only
+  --dry-run              show what would be done without creating/sending
+  --mproto-login         interactive MTProto login + connection test, writes <tool_dir>/conf/telegram.conf
   --help
+
+Subcommands:
+  push                   send archive via Telegram (see: pack push --help)
 
 Config:
   <tool_dir>/conf/pack.conf (if present) overrides pack options above.
-  <tool_dir>/conf/telegram.conf used only with push.
-                       push is non-interactive for Telegram auth; run --mproto-login to create/refresh telegram.conf.
-                       if telegram_to is missing, push will prompt for it and save for next time.
-                       supported keys:
-                       telegram_api_id, telegram_api_hash, telegram_to
-                       telegram_session or telegram_session_string
-                       telegram_phone, telegram_code, telegram_password
-                       telegram_proxy (optional, e.g. socks5://user:pass@host:1080)
-                       telegram_ack_scan_limit (default: 32)
-                       (code can be entered interactively)
-                       telegram_caption, telegram_python_min
-                       default caption (if not set): Packed by **machine_name**
-                       (default python minimum: 3.8)
-                       python modules for push: telethon, colorama
 
 Example:
+  ./pack
   ./pack push
+EOF
+  exit 2
+}
+
+usage_push() {
+  cat >&2 <<'EOF'
+pack push — send the created pack via Telegram (personal account)
+
+Options (same as pack):
+  --output-dir PATH      default: ~/syncpacks
+  --pack-prefix PREFIX   default: syncpack
+  --machine-name NAME    default: auto-detected; written to manifest only
+  --dry-run              show what would be done without creating/sending
+  --help
+
+Config:
+  <tool_dir>/conf/telegram.conf is required for push.
+  push is non-interactive for Telegram auth; run --mproto-login to create/refresh telegram.conf.
+  If telegram_to is missing, push will prompt for it and save for next time.
+  Supported keys:
+    telegram_api_id, telegram_api_hash, telegram_to
+    telegram_session or telegram_session_string
+    telegram_phone, telegram_code, telegram_password
+    telegram_proxy (optional, e.g. socks5://user:pass@host:1080)
+    telegram_ack_scan_limit (default: 32)
+    telegram_caption, telegram_python_min
+  Default caption: Packed by **machine_name**
+  Python modules for push: telethon, colorama
+
+Examples:
+  ./pack push
+  ./pack push --dry-run
 EOF
   exit 2
 }
@@ -588,6 +609,18 @@ final_path=""
 DELETE_FINAL_ON_EXIT="0"
 DRY_RUN="0"
 
+want_push_help="0"
+want_help="0"
+for _a in "$@"; do
+  case "$_a" in
+    push) want_push_help="1" ;;
+    --help|-h) want_help="1" ;;
+  esac
+done
+if [[ "$want_push_help" == "1" && "$want_help" == "1" ]]; then
+  usage_push
+fi
+
 while [[ $# -gt 0 ]]; do
   if [[ "$1" == "push" ]]; then
     SEND_TO_TELEGRAM="1"
@@ -604,7 +637,7 @@ while [[ $# -gt 0 ]]; do
     --machine-name=*)  MACHINE_NAME="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     --dry-run)         DRY_RUN="1"; shift 1;;
     --mproto-login)    MPROTO_LOGIN="1"; shift 1;;
-    --help|-h)         usage;;
+    --help|-h)         usage_main;;
     *) die "Unknown option: $1 (use --help)";;
   esac
 done
