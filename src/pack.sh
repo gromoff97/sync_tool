@@ -195,7 +195,6 @@ load_telegram_config() {
   TG_PASSWORD=""
   TG_CAPTION=""
   TG_PYTHON_MIN="3.8"
-  TG_PYTHON_BIN=""
 
   [[ -f "$cfg" ]] || return 0
 
@@ -222,7 +221,6 @@ load_telegram_config() {
       telegram_password|TELEGRAM_PASSWORD|password|PASSWORD) TG_PASSWORD="$value" ;;
       telegram_caption|TELEGRAM_CAPTION|caption|CAPTION) TG_CAPTION="$value" ;;
       telegram_python_min|TELEGRAM_PYTHON_MIN|python_min|PYTHON_MIN) TG_PYTHON_MIN="$value" ;;
-      telegram_python|TELEGRAM_PYTHON|python_bin|PYTHON_BIN) TG_PYTHON_BIN="$value" ;;
       *) ;;
     esac
   done < "$cfg"
@@ -231,59 +229,69 @@ load_telegram_config() {
   [[ "$TG_PYTHON_MIN" =~ ^[0-9]+\.[0-9]+$ ]] || die "telegram_python_min must be MAJOR.MINOR in $cfg"
 }
 
-python_version_at_least() {
-  local py_bin="$1" min_major="$2" min_minor="$3"
-  "$py_bin" -c 'import sys; min_major=int(sys.argv[1]); min_minor=int(sys.argv[2]); sys.exit(0 if (sys.version_info.major, sys.version_info.minor) >= (min_major, min_minor) else 1)' "$min_major" "$min_minor" >/dev/null 2>&1
+python_version_at_least_cmd() {
+  local min_major="$1" min_minor="$2"; shift 2
+  local -a cmd=("$@")
+  "${cmd[@]}" -c 'import sys; min_major=int(sys.argv[1]); min_minor=int(sys.argv[2]); sys.exit(0 if (sys.version_info.major, sys.version_info.minor) >= (min_major, min_minor) else 1)' "$min_major" "$min_minor" >/dev/null 2>&1
 }
 
-python_module_available() {
-  local py_bin="$1" module="$2"
-  "$py_bin" -c 'import importlib,sys; importlib.import_module(sys.argv[1])' "$module" >/dev/null 2>&1
+python_module_available_cmd() {
+  local module="$1"; shift
+  local -a cmd=("$@")
+  "${cmd[@]}" -c 'import importlib,sys; importlib.import_module(sys.argv[1])' "$module" >/dev/null 2>&1
 }
 
-python_exec_path() {
-  local py_bin="$1"
+python_exec_path_cmd() {
+  local -a cmd=("$@")
   local out
-  out="$("$py_bin" -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
+  out="$("${cmd[@]}" -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
   if [[ -n "$out" ]]; then
     printf '%s' "$out"
   else
-    printf '%s' "$py_bin"
+    printf '%s' "${cmd[0]}"
   fi
 }
 
 select_python_for_telegram() {
   local min_ver="$1"
+  shift
+  local -a required=("$@")
   local min_major="${min_ver%%.*}"
   local min_minor="${min_ver##*.}"
-  local py_bin
+  local cand
+  local -a cmd
+  PY_CMD=()
 
-  if [[ -n "${TG_PYTHON_BIN:-}" ]]; then
-    py_bin="$TG_PYTHON_BIN"
-    if python_version_at_least "$py_bin" "$min_major" "$min_minor"; then
-      printf '%s' "$py_bin"
-      return 0
-    fi
-    die "telegram_python is not usable (need Python >= $min_ver): $py_bin"
-  fi
-
-  for py_bin in python3 python py; do
-    if have "$py_bin" && python_version_at_least "$py_bin" "$min_major" "$min_minor"; then
-      printf '%s' "$py_bin"
+  for cand in "python3" "python" "py -3" "py"; do
+    read -r -a cmd <<< "$cand"
+    have "${cmd[0]}" || continue
+    python_version_at_least_cmd "$min_major" "$min_minor" "${cmd[@]}" || continue
+    local ok="1"
+    local m
+    for m in "${required[@]}"; do
+      if ! python_module_available_cmd "$m" "${cmd[@]}"; then
+        ok="0"
+        break
+      fi
+    done
+    if [[ "$ok" == "1" ]]; then
+      PY_CMD=("${cmd[@]}")
       return 0
     fi
   done
 
-  die "Python >= $min_ver not found (required for Telegram upload)."
+  if [[ "${#required[@]}" -gt 0 ]]; then
+    die "Python >= $min_ver with modules (${required[*]}) not found in PATH."
+  fi
+  die "Python >= $min_ver not found in PATH."
 }
 
 send_to_telegram_personal() {
   local file="$1" caption="$2" config_file="$3"
-  local py_bin
-  py_bin="$(select_python_for_telegram "$TG_PYTHON_MIN")"
-  log_pack "Telegram python: $(python_exec_path "$py_bin")"
-  python_module_available "$py_bin" "telethon" || die "Python module 'telethon' is not installed for $py_bin. Install it before using -s."
-  python_module_available "$py_bin" "colorama" || die "Python module 'colorama' is not installed for $py_bin. Install it before using -s."
+  local -a py_cmd
+  select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
+  py_cmd=("${PY_CMD[@]}" "-u")
+  log_pack "Telegram python: $(python_exec_path_cmd "${PY_CMD[@]}")"
 
   local script_dir script_path
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -291,8 +299,6 @@ send_to_telegram_personal() {
   [[ -f "$script_path" ]] || die "Telegram sender script not found: $script_path"
 
   local -a cmd
-  local -a py_cmd
-  py_cmd=("$py_bin" "-u")
   # Git Bash + Windows console Python can lose interactive prompts without winpty.
   if have winpty && [[ -t 0 && -t 1 ]]; then
     py_cmd=("winpty" "${py_cmd[@]}")
@@ -333,11 +339,10 @@ send_to_telegram_personal() {
 
 send_mtproto_test() {
   local config_file="$1"
-  local py_bin
-  py_bin="$(select_python_for_telegram "$TG_PYTHON_MIN")"
-  log_pack "Telegram python: $(python_exec_path "$py_bin")"
-  python_module_available "$py_bin" "telethon" || die "Python module 'telethon' is not installed for $py_bin. Install it before using --mtproto-test."
-  python_module_available "$py_bin" "colorama" || die "Python module 'colorama' is not installed for $py_bin. Install it before using --mtproto-test."
+  local -a py_cmd
+  select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
+  py_cmd=("${PY_CMD[@]}" "-u")
+  log_pack "Telegram python: $(python_exec_path_cmd "${PY_CMD[@]}")"
 
   local script_dir script_path
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -345,8 +350,6 @@ send_mtproto_test() {
   [[ -f "$script_path" ]] || die "Telegram sender script not found: $script_path"
 
   local -a cmd
-  local -a py_cmd
-  py_cmd=("$py_bin" "-u")
   # Git Bash + Windows console Python can lose interactive prompts without winpty.
   if have winpty && [[ -t 0 && -t 1 ]]; then
     py_cmd=("winpty" "${py_cmd[@]}")
@@ -441,7 +444,6 @@ Config:
                        telegram_phone, telegram_code, telegram_password
                        (code can be entered interactively)
                        telegram_caption, telegram_python_min
-                       telegram_python (optional explicit python path/command)
                        default caption (if not set): From **machine_name**
                        (default python minimum: 3.8)
                        python modules for -s: telethon, colorama
