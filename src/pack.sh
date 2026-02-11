@@ -748,6 +748,10 @@ final_path="$OUTPUT_DIR/$final"
 tmp_out="$OUTPUT_DIR/.${final}.tmp.$$"
 rm -f "$tmp_out" 2>/dev/null || true
 
+if [[ -e "$final_path" ]]; then
+  die "Pack already exists: $final_path"
+fi
+
 log_tar "Archive: $final"
 tar -czf "$tmp_out" -C "$tmp" "bundle.bundle" "manifest.tsv" || die "tar failed"
 
