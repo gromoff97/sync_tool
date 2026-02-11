@@ -206,15 +206,11 @@ load_telegram_config() {
       telegram_code|TELEGRAM_CODE|code|CODE) TG_CODE="$value" ;;
       telegram_password|TELEGRAM_PASSWORD|password|PASSWORD) TG_PASSWORD="$value" ;;
       telegram_proxy|TELEGRAM_PROXY|proxy|PROXY) TG_PROXY="$value" ;;
-      telegram_ack_text|TELEGRAM_ACK_TEXT|ack_text|ACK_TEXT) TG_ACK_TEXT="$value" ;;
       telegram_python_min|TELEGRAM_PYTHON_MIN|python_min|PYTHON_MIN) TG_PYTHON_MIN="$value" ;;
       *) ;;
     esac
   done < "$cfg"
 
-  if looks_like_placeholder "$TG_ACK_TEXT"; then
-    TG_ACK_TEXT="Unpacked by"
-  fi
   [[ -z "$TG_API_ID" || "$TG_API_ID" =~ ^[0-9]+$ ]] || die "telegram_api_id must be an integer in $cfg"
   [[ "$TG_PYTHON_MIN" =~ ^[0-9]+\.[0-9]+$ ]] || die "telegram_python_min must be MAJOR.MINOR in $cfg"
 }
@@ -562,8 +558,7 @@ Config:
     ff_only, force_tags, prune_remote_refs, prune_local_branches, clean_peer_refs
   <tool_dir>/conf/telegram.conf used only with pull.
     supported keys: telegram_api_id, telegram_api_hash, telegram_from (optional),
-                    telegram_session/session_string, telegram_proxy, telegram_python_min,
-                    telegram_ack_text (default: "Unpacked by")
+                    telegram_session/session_string, telegram_proxy, telegram_python_min
 
 Example:
   ./unpack --pack-dir /c/Work/in

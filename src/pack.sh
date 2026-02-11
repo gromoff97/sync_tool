@@ -199,7 +199,7 @@ load_telegram_config() {
   TG_CODE=""
   TG_PASSWORD=""
   TG_PROXY=""
-  TG_ACK_REQUIRED="0"
+  TG_ACK_REQUIRED="1"
   TG_ACK_TEXT="Unpacked by"
   TG_ACK_SCAN_LIMIT="200"
   TG_CAPTION=""
@@ -229,8 +229,6 @@ load_telegram_config() {
       telegram_code|TELEGRAM_CODE|code|CODE) TG_CODE="$value" ;;
       telegram_password|TELEGRAM_PASSWORD|password|PASSWORD) TG_PASSWORD="$value" ;;
       telegram_proxy|TELEGRAM_PROXY|proxy|PROXY) TG_PROXY="$value" ;;
-      telegram_ack_required|TELEGRAM_ACK_REQUIRED|ack_required|ACK_REQUIRED) TG_ACK_REQUIRED="$value" ;;
-      telegram_ack_text|TELEGRAM_ACK_TEXT|ack_text|ACK_TEXT) TG_ACK_TEXT="$value" ;;
       telegram_ack_scan_limit|TELEGRAM_ACK_SCAN_LIMIT|ack_scan_limit|ACK_SCAN_LIMIT) TG_ACK_SCAN_LIMIT="$value" ;;
       telegram_caption|TELEGRAM_CAPTION|caption|CAPTION) TG_CAPTION="$value" ;;
       telegram_python_min|TELEGRAM_PYTHON_MIN|python_min|PYTHON_MIN) TG_PYTHON_MIN="$value" ;;
@@ -241,12 +239,8 @@ load_telegram_config() {
   if looks_like_placeholder "$TG_PROXY"; then
     TG_PROXY=""
   fi
-  if looks_like_placeholder "$TG_ACK_TEXT"; then
-    TG_ACK_TEXT="Unpacked by"
-  fi
   [[ -z "$TG_API_ID" || "$TG_API_ID" =~ ^[0-9]+$ ]] || die "telegram_api_id must be an integer in $cfg"
   [[ "$TG_PYTHON_MIN" =~ ^[0-9]+\.[0-9]+$ ]] || die "telegram_python_min must be MAJOR.MINOR in $cfg"
-  [[ "$TG_ACK_REQUIRED" == "0" || "$TG_ACK_REQUIRED" == "1" ]] || die "telegram_ack_required must be 0|1 in $cfg"
   [[ "$TG_ACK_SCAN_LIMIT" =~ ^[0-9]+$ ]] || die "telegram_ack_scan_limit must be an integer in $cfg"
 }
 
@@ -556,8 +550,6 @@ Config:
                        telegram_session or telegram_session_string
                        telegram_phone, telegram_code, telegram_password
                        telegram_proxy (optional, e.g. socks5://user:pass@host:1080)
-                       telegram_ack_required (0|1, optional)
-                       telegram_ack_text (default: "Unpacked by")
                        telegram_ack_scan_limit (default: 200)
                        (code can be entered interactively)
                        telegram_caption, telegram_python_min
