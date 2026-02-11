@@ -552,6 +552,43 @@ def main() -> int:
         flood_sleep_threshold=0,
     )
     current_stage = "connect"
+
+    def ensure_authorized() -> None:
+        nonlocal current_stage
+        if client.is_user_authorized():
+            return
+
+        phone = resolve_required("telegram_phone", args.phone, "Enter telegram_phone (+7999...): ")
+        current_stage = "request_code"
+        sent = run_wait_step("Request login code", lambda: client.send_code_request(phone))
+        py("Login code sent. Check Telegram.")
+
+        code = resolve_required("telegram_code", args.code, "Enter Telegram login code: ")
+        try:
+            current_stage = "verify_code"
+            run_wait_step(
+                "Verify login code",
+                lambda: client.sign_in(
+                    phone=phone,
+                    code=code,
+                    phone_code_hash=sent.phone_code_hash,
+                ),
+            )
+        except SessionPasswordNeededError:
+            password = resolve_required(
+                "telegram_password",
+                args.password,
+                "Enter Telegram 2FA password: ",
+                secret=True,
+            )
+            current_stage = "verify_2fa"
+            run_wait_step("Verify 2FA", lambda: client.sign_in(password=password))
+
+        update_conf_file(
+            args.config_file,
+            updates={"telegram_phone": phone, "telegram_session": session},
+            remove_keys={"telegram_code", "telegram_password"},
+        )
     try:
         if args.mtproto_test:
             py("MTProto test: probes")
@@ -570,7 +607,9 @@ def main() -> int:
 
             run_wait_step("Connect Telegram", client.connect)
             py(f"Connected: {client.is_connected()}")
-            py(f"Authorized: {client.is_user_authorized()} (login not attempted in test mode)")
+            if not client.is_user_authorized():
+                ensure_authorized()
+            py(f"Authorized: {client.is_user_authorized()}")
             dc_id = getattr(client.session, "dc_id", None)
             server = getattr(client.session, "server_address", None)
             port = getattr(client.session, "port", None)
@@ -582,50 +621,10 @@ def main() -> int:
 
         if not client.is_user_authorized():
             try:
-                phone = resolve_required("telegram_phone", args.phone, "Enter telegram_phone (+7999...): ")
+                ensure_authorized()
             except ValueError as exc:
                 err(str(exc))
                 return 3
-
-            current_stage = "request_code"
-            sent = run_wait_step("Request login code", lambda: client.send_code_request(phone))
-            py("Login code sent. Check Telegram.")
-
-            try:
-                code = resolve_required("telegram_code", args.code, "Enter Telegram login code: ")
-            except ValueError as exc:
-                err(str(exc))
-                return 3
-
-            try:
-                current_stage = "verify_code"
-                run_wait_step(
-                    "Verify login code",
-                    lambda: client.sign_in(
-                        phone=phone,
-                        code=code,
-                        phone_code_hash=sent.phone_code_hash,
-                    ),
-                )
-            except SessionPasswordNeededError:
-                try:
-                    password = resolve_required(
-                        "telegram_password",
-                        args.password,
-                        "Enter Telegram 2FA password: ",
-                        secret=True,
-                    )
-                except ValueError as exc:
-                    err(str(exc))
-                    return 3
-                current_stage = "verify_2fa"
-                run_wait_step("Verify 2FA", lambda: client.sign_in(password=password))
-
-            update_conf_file(
-                args.config_file,
-                updates={"telegram_phone": phone, "telegram_session": session},
-                remove_keys={"telegram_code", "telegram_password"},
-            )
 
         current_stage = "upload"
         progress_cb, progress_suffix = make_upload_progress_logger()
