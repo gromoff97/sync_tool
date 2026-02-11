@@ -1,4 +1,4 @@
-# Offline Python deps for `pack -s`
+# Offline Python deps for `pack push`
 
 Directory `offline/python_wheels` contains all Python packages required for Telegram send mode:
 
