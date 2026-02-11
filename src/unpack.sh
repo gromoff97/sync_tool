@@ -411,13 +411,19 @@ download_pack_from_telegram() {
     FORCE_COLOR=1 "${cmd[@]}"
   fi
 
-  [[ -f "$path_file" ]] || die "Telegram download completed but path file missing."
-  PACK_FILE_OVERRIDE="$(tr -d '\r' < "$path_file")"
-  [[ -n "$PACK_FILE_OVERRIDE" ]] || die "Telegram download completed but pack path is empty."
   if [[ -n "$meta_file" && -f "$meta_file" ]]; then
     PULL_MSG_ID="$(awk -F= '$1==\"message_id\"{print $2}' "$meta_file" | tr -d '\r')"
     PULL_FILE_NAME="$(awk -F= '$1==\"file_name\"{print $2}' "$meta_file" | tr -d '\r')"
+    status="$(awk -F= '$1==\"status\"{print $2}' "$meta_file" | tr -d '\r')"
+    if [[ "$status" == "acked" ]]; then
+      PULL_ALREADY_ACKED="1"
+      return 0
+    fi
   fi
+
+  [[ -f "$path_file" ]] || die "Telegram download completed but path file missing."
+  PACK_FILE_OVERRIDE="$(tr -d '\r' < "$path_file")"
+  [[ -n "$PACK_FILE_OVERRIDE" ]] || die "Telegram download completed but pack path is empty."
 }
 
 gitpath() { git -C "$1" rev-parse --git-path "$2"; }
@@ -439,30 +445,6 @@ cleanup_peer_refs() {
   if [[ -f "$fetch_head" ]]; then
     rm -f "$fetch_head" 2>/dev/null || warn "Failed to delete FETCH_HEAD"
   fi
-}
-
-load_pull_state() {
-  [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]] || return 0
-  while IFS= read -r raw || [[ -n "$raw" ]]; do
-    raw="${raw%$'\r'}"
-    [[ -n "$raw" && "$raw" == *=* ]] || continue
-    key="${raw%%=*}"
-    value="${raw#*=}"
-    case "$key" in
-      last_message_id) STATE_LAST_MSG_ID="$value" ;;
-      last_file) STATE_LAST_FILE="$value" ;;
-      *) ;;
-    esac
-  done < "$STATE_FILE"
-}
-
-save_pull_state() {
-  [[ -n "$STATE_FILE" ]] || return 0
-  mkdir -p "$(dirname "$STATE_FILE")" 2>/dev/null || true
-  {
-    [[ -n "$STATE_LAST_MSG_ID" ]] && echo "last_message_id=$STATE_LAST_MSG_ID"
-    [[ -n "$STATE_LAST_FILE" ]] && echo "last_file=$STATE_LAST_FILE"
-  } > "$STATE_FILE"
 }
 
 ensure_repo_ok_and_clean() {
@@ -607,10 +589,7 @@ PULL_MSG_ID=""
 PULL_FILE_NAME=""
 LOG_FILE=""
 META_FILE=""
-STATE_FILE=""
-STATE_LAST_MSG_ID=""
-STATE_LAST_FILE=""
-STATE_SAVE_PENDING="0"
+PULL_ALREADY_ACKED="0"
 PULL_SKIP_ACK="0"
 PULL_SKIP_FAILLOG="0"
 DRY_RUN="0"
@@ -692,7 +671,6 @@ fi
 tmp="$(mktemp_dir)"
 LOG_FILE="$tmp/unpack.log"
 META_FILE="$tmp/pull_meta.txt"
-STATE_FILE="$TOOL_DIR/conf/unpack.state"
 
 send_ack_message() {
   [[ "$PULL_MODE" == "1" ]] || return 0
@@ -777,9 +755,6 @@ cleanup() {
       send_failure_log
     fi
   else
-    if [[ "$STATE_SAVE_PENDING" == "1" && "$PULL_MODE" == "1" ]]; then
-      save_pull_state
-    fi
     if [[ "$PULL_SKIP_ACK" != "1" ]]; then
       send_ack_message
     fi
@@ -811,36 +786,13 @@ if [[ "$PULL_MODE" == "1" ]]; then
   info "Telegram pull..."
   download_pack_from_telegram "$PACK_DIR" "$PACK_PREFIX" "$PROJECT_NAME" "$TELEGRAM_CONFIG_FILE" "$MACHINE_NAME" "$TG_ACK_TEXT" "$META_FILE"
   load_telegram_config "$TELEGRAM_CONFIG_FILE"
-  PACK_FILE="$PACK_FILE_OVERRIDE"
-  if [[ -n "$PULL_MSG_ID" || -n "$PULL_FILE_NAME" ]]; then
-    load_pull_state
-    if [[ -n "$PULL_MSG_ID" && -n "$STATE_LAST_MSG_ID" && "$PULL_MSG_ID" =~ ^[0-9]+$ && "$STATE_LAST_MSG_ID" =~ ^[0-9]+$ ]]; then
-      if [[ "$PULL_MSG_ID" -le "$STATE_LAST_MSG_ID" ]]; then
-        info "Pack message_id not newer than last pulled ($STATE_LAST_MSG_ID). Skipping."
-        PULL_SKIP_ACK="1"
-        PULL_SKIP_FAILLOG="1"
-        [[ -n "$PACK_FILE" && -f "$PACK_FILE" ]] && rm -f -- "$PACK_FILE" 2>/dev/null || true
-        exit 0
-      fi
-    fi
-    if [[ -n "$PULL_MSG_ID" && "$PULL_MSG_ID" == "$STATE_LAST_MSG_ID" ]]; then
-      info "Pack already pulled (message_id=$PULL_MSG_ID). Skipping."
-      PULL_SKIP_ACK="1"
-      PULL_SKIP_FAILLOG="1"
-      [[ -n "$PACK_FILE" && -f "$PACK_FILE" ]] && rm -f -- "$PACK_FILE" 2>/dev/null || true
-      exit 0
-    fi
-    if [[ -n "$PULL_FILE_NAME" && "$PULL_FILE_NAME" == "$STATE_LAST_FILE" ]]; then
-      info "Pack already pulled (file=$PULL_FILE_NAME). Skipping."
-      PULL_SKIP_ACK="1"
-      PULL_SKIP_FAILLOG="1"
-      [[ -n "$PACK_FILE" && -f "$PACK_FILE" ]] && rm -f -- "$PACK_FILE" 2>/dev/null || true
-      exit 0
-    fi
-    STATE_LAST_MSG_ID="$PULL_MSG_ID"
-    STATE_LAST_FILE="$PULL_FILE_NAME"
-    STATE_SAVE_PENDING="1"
+  if [[ "$PULL_ALREADY_ACKED" == "1" ]]; then
+    info "Latest pack already acknowledged. Nothing to pull."
+    PULL_SKIP_ACK="1"
+    PULL_SKIP_FAILLOG="1"
+    exit 0
   fi
+  PACK_FILE="$PACK_FILE_OVERRIDE"
 elif [[ -n "$PACK_FILE_OVERRIDE" ]]; then
   PACK_FILE="$PACK_FILE_OVERRIDE"
 else

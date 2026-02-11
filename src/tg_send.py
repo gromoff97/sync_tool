@@ -802,6 +802,8 @@ def main() -> int:
             pattern = re.compile(
                 rf"^{re.escape(args.pack_prefix)}_{re.escape(args.project_name)}_([0-9]{{8}}_[0-9]{{6}})\.tgz$"
             )
+            ack_text = (args.ack_text or "Unpacked by").strip()
+            ack_reply_ids = set()
 
             best_msg = None
             best_ts = ""
@@ -809,6 +811,10 @@ def main() -> int:
             scanned = 0
             for msg in client.iter_messages(entity, limit=args.scan_limit):
                 scanned += 1
+                if msg and msg.message and ack_text and msg.message.startswith(ack_text):
+                    if getattr(msg, "reply_to_msg_id", None):
+                        ack_reply_ids.add(msg.reply_to_msg_id)
+                    continue
                 if not msg or not msg.file:
                     continue
                 name = getattr(msg.file, "name", "") or ""
@@ -827,6 +833,22 @@ def main() -> int:
                     f"{args.pack_prefix}_{args.project_name}_*.tgz"
                 )
                 return 4
+
+            already_acked = best_msg.id in ack_reply_ids
+            if args.meta_file:
+                try:
+                    with open(args.meta_file, "w", encoding="utf-8") as fh:
+                        fh.write(f"message_id={best_msg.id}\n")
+                        if getattr(best_msg, "chat_id", None) is not None:
+                            fh.write(f"chat_id={best_msg.chat_id}\n")
+                        fh.write(f"file_name={best_name}\n")
+                        fh.write(f"status={'acked' if already_acked else 'new'}\n")
+                except OSError:
+                    pass
+
+            if already_acked:
+                py("Latest pack already acknowledged. Skipping download.")
+                return 0
 
             os.makedirs(args.pack_dir, exist_ok=True)
             dest_path = os.path.join(args.pack_dir, best_name)
@@ -854,15 +876,6 @@ def main() -> int:
             if args.path_file:
                 with open(args.path_file, "w", encoding="utf-8") as fh:
                     fh.write(dest_path)
-            if args.meta_file:
-                try:
-                    with open(args.meta_file, "w", encoding="utf-8") as fh:
-                        fh.write(f"message_id={best_msg.id}\n")
-                        if getattr(best_msg, "chat_id", None) is not None:
-                            fh.write(f"chat_id={best_msg.chat_id}\n")
-                        fh.write(f"file_name={best_name}\n")
-                except OSError:
-                    pass
 
             if args.config_file and from_peer:
                 update_conf_file(args.config_file, updates={"telegram_from": from_peer})
