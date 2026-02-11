@@ -151,6 +151,249 @@ load_config_overrides() {
   done < "$cfg"
 }
 
+load_telegram_config() {
+  local cfg="$1"
+  TG_API_ID=""
+  TG_API_HASH=""
+  TG_FROM=""
+  TG_SESSION=""
+  TG_SESSION_STRING=""
+  TG_PHONE=""
+  TG_CODE=""
+  TG_PASSWORD=""
+  TG_PROXY=""
+  TG_PYTHON_MIN="3.8"
+
+  [[ -f "$cfg" ]] || return 0
+
+  local raw line key value
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    raw="${raw%$'\r'}"
+    line="${raw%%#*}"
+    line="$(trim_ws "$line")"
+    [[ -n "$line" ]] || continue
+    [[ "$line" == *=* ]] || die "Invalid config line in $cfg: $raw"
+
+    key="$(trim_ws "${line%%=*}")"
+    value="$(trim_ws "${line#*=}")"
+    value="$(strip_quotes "$value")"
+
+    case "$key" in
+      telegram_api_id|TELEGRAM_API_ID|api_id|API_ID) TG_API_ID="$value" ;;
+      telegram_api_hash|TELEGRAM_API_HASH|api_hash|API_HASH) TG_API_HASH="$value" ;;
+      telegram_from|TELEGRAM_FROM|from|FROM|telegram_peer|TELEGRAM_PEER|peer|PEER) TG_FROM="$value" ;;
+      telegram_session|TELEGRAM_SESSION|session|SESSION) TG_SESSION="$(expand_user_path "$value")" ;;
+      telegram_session_string|TELEGRAM_SESSION_STRING|session_string|SESSION_STRING) TG_SESSION_STRING="$value" ;;
+      telegram_phone|TELEGRAM_PHONE|phone|PHONE) TG_PHONE="$value" ;;
+      telegram_code|TELEGRAM_CODE|code|CODE) TG_CODE="$value" ;;
+      telegram_password|TELEGRAM_PASSWORD|password|PASSWORD) TG_PASSWORD="$value" ;;
+      telegram_proxy|TELEGRAM_PROXY|proxy|PROXY) TG_PROXY="$value" ;;
+      telegram_python_min|TELEGRAM_PYTHON_MIN|python_min|PYTHON_MIN) TG_PYTHON_MIN="$value" ;;
+      *) ;;
+    esac
+  done < "$cfg"
+
+  [[ -z "$TG_API_ID" || "$TG_API_ID" =~ ^[0-9]+$ ]] || die "telegram_api_id must be an integer in $cfg"
+  [[ "$TG_PYTHON_MIN" =~ ^[0-9]+\.[0-9]+$ ]] || die "telegram_python_min must be MAJOR.MINOR in $cfg"
+}
+
+require_telegram_config() {
+  local cfg="$1"
+  [[ -f "$cfg" ]] || die "telegram.conf not found. Run: pack --mproto-login"
+  [[ -n "$TG_API_ID" ]] || die "telegram_api_id missing in $cfg. Run: pack --mproto-login"
+  [[ -n "$TG_API_HASH" ]] || die "telegram_api_hash missing in $cfg. Run: pack --mproto-login"
+}
+
+python_version_at_least_cmd() {
+  local min_major="$1" min_minor="$2"; shift 2
+  local -a cmd=("$@")
+  "${cmd[@]}" -c 'import sys; min_major=int(sys.argv[1]); min_minor=int(sys.argv[2]); sys.exit(0 if (sys.version_info.major, sys.version_info.minor) >= (min_major, min_minor) else 1)' "$min_major" "$min_minor" >/dev/null 2>&1
+}
+
+python_module_available_cmd() {
+  local module="$1"; shift
+  local -a cmd=("$@")
+  "${cmd[@]}" -c 'import importlib,sys; importlib.import_module(sys.argv[1])' "$module" >/dev/null 2>&1
+}
+
+python_exec_path_cmd() {
+  local -a cmd=("$@")
+  local out
+  out="$("${cmd[@]}" -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
+  if [[ -n "$out" ]]; then
+    printf '%s' "$out"
+  else
+    printf '%s' "${cmd[0]}"
+  fi
+}
+
+py_launcher_paths() {
+  local py_cmd="py"
+  if ! have "$py_cmd"; then
+    if [[ -x "/c/Windows/py.exe" ]]; then
+      py_cmd="/c/Windows/py.exe"
+    else
+      return 0
+    fi
+  fi
+  "$py_cmd" -0p 2>/dev/null | tr -d '\r' | awk 'NF{ $1=""; if ($2=="*") $2=""; sub(/^ +/,""); print }'
+}
+
+python_candidates_from_globs() {
+  local home="${HOME:-}"
+  local -a globs=()
+  if [[ -n "$home" ]]; then
+    globs+=("$home/AppData/Local/Programs/Python/Python*/python.exe")
+    globs+=("$home/AppData/Local/Microsoft/WindowsApps/python.exe")
+  fi
+  globs+=("/c/Program Files/Python*/python.exe")
+  globs+=("/c/Program Files (x86)/Python*/python.exe")
+  globs+=("/c/Python*/python.exe")
+
+  shopt -s nullglob
+  local g p
+  for g in "${globs[@]}"; do
+    for p in $g; do
+      printf '%s\n' "$p"
+    done
+  done
+  shopt -u nullglob
+}
+
+select_python_for_telegram() {
+  local min_ver="$1"
+  shift
+  local -a required=("$@")
+  local min_major="${min_ver%%.*}"
+  local min_minor="${min_ver##*.}"
+  local cand
+  local -a cmd
+  PY_CMD=()
+
+  for cand in "python3" "python" "py -3" "py"; do
+    read -r -a cmd <<< "$cand"
+    have "${cmd[0]}" || continue
+    python_version_at_least_cmd "$min_major" "$min_minor" "${cmd[@]}" || continue
+    local ok="1"
+    local m
+    for m in "${required[@]}"; do
+      if ! python_module_available_cmd "$m" "${cmd[@]}"; then
+        ok="0"
+        break
+      fi
+    done
+    if [[ "$ok" == "1" ]]; then
+      PY_CMD=("${cmd[@]}")
+      return 0
+    fi
+  done
+
+  while IFS= read -r cand; do
+    [[ -n "$cand" ]] || continue
+    cmd=("$cand")
+    python_version_at_least_cmd "$min_major" "$min_minor" "${cmd[@]}" || continue
+    local ok="1"
+    local m
+    for m in "${required[@]}"; do
+      if ! python_module_available_cmd "$m" "${cmd[@]}"; then
+        ok="0"
+        break
+      fi
+    done
+    if [[ "$ok" == "1" ]]; then
+      PY_CMD=("${cmd[@]}")
+      return 0
+    fi
+  done < <(py_launcher_paths)
+
+  while IFS= read -r cand; do
+    [[ -n "$cand" ]] || continue
+    cmd=("$cand")
+    python_version_at_least_cmd "$min_major" "$min_minor" "${cmd[@]}" || continue
+    local ok="1"
+    local m
+    for m in "${required[@]}"; do
+      if ! python_module_available_cmd "$m" "${cmd[@]}"; then
+        ok="0"
+        break
+      fi
+    done
+    if [[ "$ok" == "1" ]]; then
+      PY_CMD=("${cmd[@]}")
+      return 0
+    fi
+  done < <(python_candidates_from_globs)
+
+  if [[ "${#required[@]}" -gt 0 ]]; then
+    die "Python >= $min_ver with modules (${required[*]}) not found in PATH, py launcher list, or common install dirs."
+  fi
+  die "Python >= $min_ver not found in PATH, py launcher list, or common install dirs."
+}
+
+download_pack_from_telegram() {
+  local out_dir="$1" prefix="$2" project="$3" config_file="$4"
+  local -a py_cmd
+  select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
+  py_cmd=("${PY_CMD[@]}" "-u")
+  info "Telegram python: $(python_exec_path_cmd "${PY_CMD[@]}")"
+
+  local script_dir script_path
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  script_path="$script_dir/send_telegram_personal.py"
+  [[ -f "$script_path" ]] || die "Telegram sender script not found: $script_path"
+
+  local path_file
+  path_file="$tmp/pulled_path.txt"
+  rm -f -- "$path_file" 2>/dev/null || true
+
+  local -a cmd
+  if have winpty && [[ -t 0 && -t 1 ]]; then
+    py_cmd=("winpty" "${py_cmd[@]}")
+  fi
+
+  cmd=("${py_cmd[@]}" "$script_path"
+    --api-id "$TG_API_ID"
+    --api-hash "$TG_API_HASH"
+    --session "$TG_SESSION"
+    --config-file "$config_file"
+    --pull-latest
+    --pack-dir "$out_dir"
+    --pack-prefix "$prefix"
+    --project-name "$project"
+    --path-file "$path_file"
+  )
+  if [[ -n "$TG_PROXY" ]]; then
+    cmd+=(--proxy "$TG_PROXY")
+  fi
+  if [[ -n "$TG_SESSION_STRING" ]]; then
+    cmd+=(--session-string "$TG_SESSION_STRING")
+  fi
+  if [[ -n "$TG_PHONE" ]]; then
+    cmd+=(--phone "$TG_PHONE")
+  fi
+  if [[ -n "$TG_CODE" ]]; then
+    cmd+=(--code "$TG_CODE")
+  fi
+  if [[ -n "$TG_PASSWORD" ]]; then
+    cmd+=(--password "$TG_PASSWORD")
+  fi
+  if [[ -n "$TG_FROM" ]]; then
+    cmd+=(--from "$TG_FROM")
+  fi
+
+  if [[ -z "$C_RESET" ]]; then
+    NO_COLOR=1 "${cmd[@]}"
+  elif [[ "$USE_256_COLOR" == "1" ]]; then
+    FORCE_COLOR=1 FORCE_256_COLOR=1 "${cmd[@]}"
+  else
+    FORCE_COLOR=1 "${cmd[@]}"
+  fi
+
+  [[ -f "$path_file" ]] || die "Telegram download completed but path file missing."
+  PACK_FILE_OVERRIDE="$(tr -d '\r' < "$path_file")"
+  [[ -n "$PACK_FILE_OVERRIDE" ]] || die "Telegram download completed but pack path is empty."
+}
+
 gitpath() { git -C "$1" rev-parse --git-path "$2"; }
 
 cleanup_peer_refs() {
@@ -275,7 +518,9 @@ If run inside a git repository, updates that repository.
 If run outside a git repository, creates a new repository from the latest pack.
 
 Optional (defaults):
+  pull                       download latest pack from Telegram and apply it
   --pack-dir PATH             (default: ~/syncpacks)
+  --pack-file PATH            (use a specific pack file instead of scanning pack-dir)
   --pack-prefix PREFIX         (default: syncpack)
   --project-name NAME          (default: autodetect from current repo or selected pack)
   --peer NAME                  (default: sync)
@@ -291,6 +536,9 @@ Config:
   Supported keys include:
     pack_dir, pack_prefix, project_name, peer,
     ff_only, force_tags, prune_remote_refs, prune_local_branches, clean_peer_refs
+  <tool_dir>/conf/telegram.conf used only with pull.
+    supported keys: telegram_api_id, telegram_api_hash, telegram_from (optional),
+                    telegram_session/session_string, telegram_proxy, telegram_python_min
 
 Example:
   ./unpack --pack-dir /c/Work/in
@@ -303,6 +551,8 @@ require_tools
 
 PACK_DIR="${HOME:+$HOME/syncpacks}"
 PACK_PREFIX="syncpack"
+PACK_FILE_OVERRIDE=""
+PULL_MODE="0"
 
 # defaults per your request
 PROJECT_NAME=""
@@ -314,9 +564,16 @@ PRUNE_LOCAL_BRANCHES="0"
 CLEAN_PEER_REFS="1"
 
 while [[ $# -gt 0 ]]; do
+  if [[ "$1" == "pull" ]]; then
+    PULL_MODE="1"
+    shift 1
+    continue
+  fi
   case "$1" in
     --pack-dir)               PACK_DIR="${2:-}"; shift 2;;
     --pack-dir=*)             PACK_DIR="${1#*=}"; shift 1;;
+    --pack-file)              PACK_FILE_OVERRIDE="${2:-}"; shift 2;;
+    --pack-file=*)            PACK_FILE_OVERRIDE="${1#*=}"; shift 1;;
     --pack-prefix)            PACK_PREFIX="${2:-}"; shift 2;;
     --pack-prefix=*)          PACK_PREFIX="${1#*=}"; shift 1;;
     --project-name)           PROJECT_NAME="${2:-}"; shift 2;;
@@ -369,7 +626,24 @@ else
   MODE="bootstrap"
 fi
 
-PACK_FILE="$(pick_latest_pack "$PACK_DIR" "$PACK_PREFIX" "$PROJECT_NAME")"
+if [[ "$PULL_MODE" == "1" && -n "$PACK_FILE_OVERRIDE" ]]; then
+  die "--pack-file cannot be used together with pull."
+fi
+
+if [[ "$PULL_MODE" == "1" ]]; then
+  [[ -n "$PROJECT_NAME" ]] || die "Project name required for pull. Use --project-name or run inside repo."
+  TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
+  load_telegram_config "$TELEGRAM_CONFIG_FILE"
+  require_telegram_config "$TELEGRAM_CONFIG_FILE"
+  info "Telegram pull..."
+  download_pack_from_telegram "$PACK_DIR" "$PACK_PREFIX" "$PROJECT_NAME" "$TELEGRAM_CONFIG_FILE"
+  PACK_FILE="$PACK_FILE_OVERRIDE"
+elif [[ -n "$PACK_FILE_OVERRIDE" ]]; then
+  PACK_FILE="$PACK_FILE_OVERRIDE"
+else
+  PACK_FILE="$(pick_latest_pack "$PACK_DIR" "$PACK_PREFIX" "$PROJECT_NAME")"
+fi
+[[ -f "$PACK_FILE" ]] || die "Pack file not found: $PACK_FILE"
 pack_project="$(project_from_pack_name "$PACK_PREFIX" "$PACK_FILE" || true)"
 [[ -n "$pack_project" ]] || die "Pack file has invalid name: $(basename "$PACK_FILE")"
 if [[ -z "$PROJECT_NAME" ]]; then

@@ -525,7 +525,8 @@ Optional (defaults):
   --output-dir PATH          (default: ~/syncpacks)
   --pack-prefix PREFIX       (default: syncpack)
   --machine-name NAME        (default: auto-detected; written to manifest only)
-  -s                         send archive from personal account using <tool_dir>/conf/telegram.conf
+  push                       send archive from personal account using <tool_dir>/conf/telegram.conf
+  -s                         same as push (legacy)
   --mproto-login             interactive MTProto login + connection test, writes <tool_dir>/conf/telegram.conf
   --help
 
@@ -569,6 +570,12 @@ final_path=""
 DELETE_FINAL_ON_EXIT="0"
 
 while [[ $# -gt 0 ]]; do
+  if [[ "$1" == "push" ]]; then
+    SEND_TO_TELEGRAM="1"
+    OTHER_OPTS_USED="1"
+    shift 1
+    continue
+  fi
   case "$1" in
     --output-dir)      OUTPUT_DIR="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
     --output-dir=*)    OUTPUT_DIR="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;

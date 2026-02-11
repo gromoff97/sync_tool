@@ -27,9 +27,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--code", default="")
     parser.add_argument("--password", default="")
     parser.add_argument("--to", default="", help="Username, phone, user ID, or Saved Messages")
+    parser.add_argument("--from", dest="from_peer", default="", help="Source chat/user for pull")
     parser.add_argument("--file", default="")
     parser.add_argument("--caption", default="")
     parser.add_argument("--proxy", default="", help="Proxy URL, e.g. socks5://user:pass@host:1080")
+    parser.add_argument("--pull-latest", action="store_true", help="Download latest sync pack from Telegram")
+    parser.add_argument("--pack-dir", default="")
+    parser.add_argument("--pack-prefix", default="")
+    parser.add_argument("--project-name", default="")
+    parser.add_argument("--path-file", default="")
+    parser.add_argument("--scan-limit", type=int, default=200)
     parser.add_argument("--mproto-login", action="store_true", help="Interactive MTProto login and connection test")
     parser.add_argument("--mtproto-test", dest="mproto_login", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values")
@@ -269,6 +276,25 @@ def send_file_with_timeout(
     )
 
 
+def download_file_with_timeout(
+    client: object,
+    message: object,
+    dest_path: str,
+    progress_callback: Callable[[int, int], None],
+    timeout_seconds: int,
+) -> object:
+    async def _download() -> object:
+        return await client.download_media(
+            message,
+            file=dest_path,
+            progress_callback=progress_callback,
+        )
+
+    return client.loop.run_until_complete(
+        asyncio.wait_for(_download(), timeout=timeout_seconds)
+    )
+
+
 def looks_like_placeholder(value: str) -> bool:
     v = value.strip().upper()
     return v.startswith("REPLACE") or "XXXXXXXX" in v
@@ -335,6 +361,13 @@ def format_proxy_for_log(value: str) -> str:
         return f"{scheme}://{host}:{port}"
     except Exception:
         return "set"
+
+
+def extract_pack_timestamp(name: str) -> str:
+    m = re.match(r"^.+_([0-9]{8}_[0-9]{6})\.tgz$", name)
+    if not m:
+        return ""
+    return m.group(1)
 
 
 def update_conf_file(path: str, updates: Optional[Dict[str, str]] = None, remove_keys: Optional[Set[str]] = None) -> None:
@@ -445,12 +478,21 @@ def main() -> int:
     NON_INTERACTIVE = bool(args.non_interactive)
 
     if not args.mproto_login:
+        if args.pull_latest and args.file:
+            err("file cannot be used with --pull-latest")
+            return 1
         if not args.file:
-            err("file is required unless --mproto-login is set")
-            return 1
-        if not os.path.isfile(args.file):
-            err(f"file not found: {args.file}")
-            return 1
+            if not args.pull_latest:
+                err("file is required unless --mproto-login or --pull-latest is set")
+                return 1
+        if args.pull_latest:
+            if not args.pack_dir or not args.pack_prefix or not args.project_name:
+                err("--pull-latest requires --pack-dir, --pack-prefix, and --project-name")
+                return 1
+        else:
+            if not os.path.isfile(args.file):
+                err(f"file not found: {args.file}")
+                return 1
 
     try:
         from colorama import just_fix_windows_console
@@ -542,6 +584,7 @@ def main() -> int:
         _err_detail(f"  api_id: {args.api_id or 'unset'}")
         _err_detail(f"  api_hash: {_mask_secret(args.api_hash)}")
         _err_detail(f"  to: {args.to or 'unset'}")
+        _err_detail(f"  from: {args.from_peer or 'unset'}")
         _err_detail(f"  session: {os.path.expanduser(args.session or '~/.sync_tool_telegram')}")
         _err_detail(f"  session_string: {'set' if (args.session_string or '').strip() else 'unset'}")
         _err_detail(f"  proxy: {format_proxy_for_log(proxy_raw)}")
@@ -583,6 +626,8 @@ def main() -> int:
 
     proxy_raw = ""
     proxy_tuple = None
+    to_peer = ""
+    from_peer = ""
 
     try:
         py("Telegram settings...")
@@ -595,6 +640,12 @@ def main() -> int:
         api_hash = resolve_required("telegram_api_hash", args.api_hash, "Enter telegram_api_hash: ")
         if args.mproto_login:
             to_peer = (args.to or "").strip()
+        elif args.pull_latest:
+            from_peer = (args.from_peer or "").strip()
+            if not from_peer:
+                if NON_INTERACTIVE:
+                    raise ValueError("telegram_from is required. Run pack --mproto-login or set telegram_from.")
+                from_peer = prompt_input("Enter telegram_from (@group/@user/phone/id): ")
         else:
             to_peer = resolve_required("telegram_to", args.to, "Enter telegram_to (@username/phone/id/me): ")
 
@@ -619,6 +670,8 @@ def main() -> int:
         updates["telegram_proxy"] = proxy_raw
     if to_peer:
         updates["telegram_to"] = to_peer
+    if from_peer:
+        updates["telegram_from"] = from_peer
 
     session_string = (args.session_string or "").strip()
     if looks_like_placeholder(session_string):
@@ -716,6 +769,72 @@ def main() -> int:
             if not proxy_raw:
                 remove_keys.add("telegram_proxy")
             update_conf_file(args.config_file, updates=updates, remove_keys=remove_keys)
+            return 0
+
+        if args.pull_latest:
+            run_wait_step("Connect Telegram", client.connect)
+            ensure_authorized()
+            py(f"Authorized: {client.is_user_authorized()}")
+
+            entity = client.get_entity(from_peer)
+            pattern = re.compile(
+                rf"^{re.escape(args.pack_prefix)}_{re.escape(args.project_name)}_([0-9]{{8}}_[0-9]{{6}})\.tgz$"
+            )
+
+            best_msg = None
+            best_ts = ""
+            best_name = ""
+            scanned = 0
+            for msg in client.iter_messages(entity, limit=args.scan_limit):
+                scanned += 1
+                if not msg or not msg.file:
+                    continue
+                name = getattr(msg.file, "name", "") or ""
+                m = pattern.match(name)
+                if not m:
+                    continue
+                ts = m.group(1)
+                if ts > best_ts:
+                    best_ts = ts
+                    best_msg = msg
+                    best_name = name
+
+            if not best_msg:
+                err(
+                    f"No packs found in last {args.scan_limit} messages for "
+                    f"{args.pack_prefix}_{args.project_name}_*.tgz"
+                )
+                return 4
+
+            os.makedirs(args.pack_dir, exist_ok=True)
+            dest_path = os.path.join(args.pack_dir, best_name)
+            tmp_path = dest_path + ".part"
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+            progress_cb, progress_suffix = make_upload_progress_logger()
+            run_wait_step(
+                "Download from Telegram",
+                lambda: download_file_with_timeout(
+                    client=client,
+                    message=best_msg,
+                    dest_path=tmp_path,
+                    progress_callback=progress_cb,
+                    timeout_seconds=UPLOAD_TIMEOUT_SECONDS,
+                ),
+                status_suffix=progress_suffix,
+            )
+            os.replace(tmp_path, dest_path)
+            py(f"Downloaded: {dest_path}")
+            if args.path_file:
+                with open(args.path_file, "w", encoding="utf-8") as fh:
+                    fh.write(dest_path)
+
+            if args.config_file and from_peer:
+                update_conf_file(args.config_file, updates={"telegram_from": from_peer})
             return 0
 
         run_wait_step("Connect Telegram", client.connect)
