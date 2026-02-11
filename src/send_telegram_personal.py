@@ -401,7 +401,7 @@ def main() -> int:
     telethon_logger.setLevel(logging.CRITICAL + 1)
 
     try:
-    py("Telegram settings...")
+        py("Telegram settings...")
         api_id_raw = resolve_required("telegram_api_id", args.api_id, "Enter telegram_api_id: ")
         if not api_id_raw.isdigit():
             err("telegram_api_id must be an integer.")
