@@ -357,7 +357,7 @@ download_pack_from_telegram() {
 
   local script_dir script_path
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  script_path="$script_dir/send_telegram_personal.py"
+  script_path="$script_dir/tg_send.py"
   [[ -f "$script_path" ]] || die "Telegram sender script not found: $script_path"
 
   local path_file
