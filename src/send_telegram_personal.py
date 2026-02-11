@@ -3,10 +3,13 @@ import argparse
 import asyncio
 import logging
 import os
+import platform
 import re
+import socket
 import sys
 import threading
 import time
+import traceback
 from typing import Callable, Dict, List, Optional, Set, Tuple, TypeVar
 
 
@@ -387,7 +390,7 @@ def main() -> int:
         os.makedirs(session_dir, exist_ok=True)
 
     try:
-        from telethon.errors import FloodWaitError, SessionPasswordNeededError
+        from telethon.errors import FloodWaitError, SessionPasswordNeededError, ProxyConnectionError
         from telethon.sessions import StringSession
         from telethon.sync import TelegramClient
     except Exception:
@@ -399,6 +402,86 @@ def main() -> int:
     telethon_logger.handlers = [logging.NullHandler()]
     telethon_logger.propagate = False
     telethon_logger.setLevel(logging.CRITICAL + 1)
+    telethon_version = getattr(sys.modules.get("telethon"), "__version__", "unknown")
+
+    def _mask_secret(value: str, keep: int = 4) -> str:
+        if not value:
+            return "unset"
+        if len(value) <= keep:
+            return "***"
+        return f"{value[:keep]}***"
+
+    def _probe_tcp(host: str, port: int, timeout: float = 3.0) -> Tuple[bool, str]:
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True, "ok"
+        except Exception as exc:
+            return False, f"{type(exc).__name__}: {exc}"
+
+    def _dns_lookup(host: str) -> Tuple[bool, str]:
+        try:
+            infos = socket.getaddrinfo(host, None)
+            ips = sorted({info[4][0] for info in infos})
+            return True, ", ".join(ips[:6])
+        except Exception as exc:
+            return False, f"{type(exc).__name__}: {exc}"
+
+    def _err_detail(msg: str) -> None:
+        err(msg)
+
+    def diagnose_connection_failure(stage: str, exc: BaseException) -> None:
+        _err_detail(f"Connection diagnostics (stage={stage}):")
+        _err_detail(f"  exception: {type(exc).__name__}: {exc}")
+        if isinstance(exc, OSError):
+            winerror = getattr(exc, "winerror", None)
+            errno = getattr(exc, "errno", None)
+            if winerror is not None:
+                _err_detail(f"  winerror: {winerror}")
+            if errno is not None:
+                _err_detail(f"  errno: {errno}")
+        _err_detail(f"  python: {platform.python_version()} ({sys.executable})")
+        _err_detail(f"  os: {platform.platform()}")
+        _err_detail(f"  telethon: {telethon_version}")
+        _err_detail(f"  api_id: {args.api_id or 'unset'}")
+        _err_detail(f"  api_hash: {_mask_secret(args.api_hash)}")
+        _err_detail(f"  to: {args.to or 'unset'}")
+        _err_detail(f"  session: {os.path.expanduser(args.session or '~/.sync_tool_telegram')}")
+        _err_detail(f"  session_string: {'set' if (args.session_string or '').strip() else 'unset'}")
+        _err_detail(f"  timeout: {UPLOAD_TIMEOUT_SECONDS}s")
+
+        proxy_env = []
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+                    "http_proxy", "https_proxy", "all_proxy", "no_proxy"):
+            val = os.getenv(key)
+            if val:
+                proxy_env.append(f"{key}={val}")
+        if proxy_env:
+            _err_detail("  proxy env: " + " | ".join(proxy_env))
+        else:
+            _err_detail("  proxy env: none")
+
+        ok, dns_info = _dns_lookup("telegram.org")
+        _err_detail(f"  dns telegram.org: {'ok' if ok else 'fail'} ({dns_info})")
+        ok, dns_info = _dns_lookup("api.telegram.org")
+        _err_detail(f"  dns api.telegram.org: {'ok' if ok else 'fail'} ({dns_info})")
+
+        probes = [
+            ("149.154.167.50", 443),
+            ("149.154.167.50", 80),
+            ("149.154.167.51", 443),
+            ("149.154.167.91", 443),
+            ("91.108.56.130", 443),
+        ]
+        _err_detail("  tcp probe (may be blocked by network/VPN):")
+        for host, port in probes:
+            ok, info = _probe_tcp(host, port)
+            _err_detail(f"    {host}:{port} -> {'ok' if ok else 'fail'} ({info})")
+
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__, limit=5)).strip()
+        if tb:
+            _err_detail("  traceback (last 5):")
+            for line in tb.splitlines():
+                _err_detail(f"    {line}")
 
     try:
         py("Telegram settings...")
@@ -444,6 +527,7 @@ def main() -> int:
         timeout=20,
         flood_sleep_threshold=0,
     )
+    current_stage = "connect"
     try:
         run_wait_step("Connect Telegram", client.connect)
 
@@ -454,6 +538,7 @@ def main() -> int:
                 err(str(exc))
                 return 3
 
+            current_stage = "request_code"
             sent = run_wait_step("Request login code", lambda: client.send_code_request(phone))
             py("Login code sent. Check Telegram.")
 
@@ -464,6 +549,7 @@ def main() -> int:
                 return 3
 
             try:
+                current_stage = "verify_code"
                 run_wait_step(
                     "Verify login code",
                     lambda: client.sign_in(
@@ -483,6 +569,7 @@ def main() -> int:
                 except ValueError as exc:
                     err(str(exc))
                     return 3
+                current_stage = "verify_2fa"
                 run_wait_step("Verify 2FA", lambda: client.sign_in(password=password))
 
             update_conf_file(
@@ -491,6 +578,7 @@ def main() -> int:
                 remove_keys={"telegram_code", "telegram_password"},
             )
 
+        current_stage = "upload"
         progress_cb, progress_suffix = make_upload_progress_logger()
         run_wait_step(
             "Upload to Telegram",
@@ -508,8 +596,17 @@ def main() -> int:
     except KeyboardInterrupt:
         err("Interrupted by user.")
         return 130
-    except asyncio.TimeoutError:
-        err(f"Telegram upload timed out after {UPLOAD_TIMEOUT_SECONDS} second(s).")
+    except asyncio.TimeoutError as exc:
+        err(f"Telegram timeout after {UPLOAD_TIMEOUT_SECONDS}s (stage={current_stage}).")
+        diagnose_connection_failure(current_stage, exc)
+        return 1
+    except ProxyConnectionError as exc:
+        err(f"Telegram proxy connection failed (stage={current_stage}).")
+        diagnose_connection_failure(current_stage, exc)
+        return 1
+    except (OSError, ConnectionError) as exc:
+        err(f"Telegram connection failed (stage={current_stage}).")
+        diagnose_connection_failure(current_stage, exc)
         return 1
     except FloodWaitError as exc:
         seconds = getattr(exc, "seconds", None)
@@ -520,6 +617,7 @@ def main() -> int:
         return 1
     except Exception as exc:
         err(f"Telegram personal upload failed: {exc}")
+        diagnose_connection_failure(current_stage, exc)
         return 1
     finally:
         try:
