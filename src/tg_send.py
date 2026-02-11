@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--to", default="", help="Username, phone, user ID, or Saved Messages")
     parser.add_argument("--from", dest="from_peer", default="", help="Source chat/user for pull")
     parser.add_argument("--file", default="")
+    parser.add_argument("--text", default="")
     parser.add_argument("--caption", default="")
     parser.add_argument("--proxy", default="", help="Proxy URL, e.g. socks5://user:pass@host:1080")
     parser.add_argument("--pull-latest", action="store_true", help="Download latest sync pack from Telegram")
@@ -36,10 +37,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pack-prefix", default="")
     parser.add_argument("--project-name", default="")
     parser.add_argument("--path-file", default="")
+    parser.add_argument("--meta-file", default="")
     parser.add_argument("--scan-limit", type=int, default=200)
     parser.add_argument("--require-ack", action="store_true")
     parser.add_argument("--ack-text", default="Unpacked by")
     parser.add_argument("--machine-name", default="")
+    parser.add_argument("--reply-to", type=int, default=0)
     parser.add_argument("--mproto-login", action="store_true", help="Interactive MTProto login and connection test")
     parser.add_argument("--mtproto-test", dest="mproto_login", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values")
@@ -264,6 +267,7 @@ def send_file_with_timeout(
     caption: str,
     progress_callback: Callable[[int, int], None],
     timeout_seconds: int,
+    reply_to: int = 0,
 ) -> object:
     async def _upload() -> object:
         return await client.send_file(
@@ -272,6 +276,7 @@ def send_file_with_timeout(
             caption=caption or None,
             parse_mode="md",
             progress_callback=progress_callback,
+            reply_to=reply_to or None,
         )
 
     return client.loop.run_until_complete(
@@ -488,19 +493,22 @@ def main() -> int:
     NON_INTERACTIVE = bool(args.non_interactive)
 
     if not args.mproto_login:
-        if args.pull_latest and args.file:
-            err("file cannot be used with --pull-latest")
+        if args.pull_latest and (args.file or args.text):
+            err("file/text cannot be used with --pull-latest")
             return 1
-        if not args.file:
+        if args.text and args.file:
+            err("use either --text or --file, not both")
+            return 1
+        if not args.file and not args.text:
             if not args.pull_latest:
-                err("file is required unless --mproto-login or --pull-latest is set")
+                err("file or text is required unless --mproto-login or --pull-latest is set")
                 return 1
         if args.pull_latest:
             if not args.pack_dir or not args.pack_prefix or not args.project_name:
                 err("--pull-latest requires --pack-dir, --pack-prefix, and --project-name")
                 return 1
         else:
-            if not os.path.isfile(args.file):
+            if args.file and not os.path.isfile(args.file):
                 err(f"file not found: {args.file}")
                 return 1
 
@@ -843,16 +851,18 @@ def main() -> int:
             if args.path_file:
                 with open(args.path_file, "w", encoding="utf-8") as fh:
                     fh.write(dest_path)
+            if args.meta_file:
+                try:
+                    with open(args.meta_file, "w", encoding="utf-8") as fh:
+                        fh.write(f"message_id={best_msg.id}\n")
+                        if getattr(best_msg, "chat_id", None) is not None:
+                            fh.write(f"chat_id={best_msg.chat_id}\n")
+                        fh.write(f"file_name={best_name}\n")
+                except OSError:
+                    pass
 
             if args.config_file and from_peer:
                 update_conf_file(args.config_file, updates={"telegram_from": from_peer})
-
-            ack_text = _unpack_ack_text(args.ack_text, args.machine_name)
-            if ack_text:
-                run_wait_step(
-                    "Send unpack ack",
-                    lambda: client.send_message(entity, ack_text, reply_to=best_msg.id),
-                )
             return 0
 
         run_wait_step("Connect Telegram", client.connect)
@@ -898,6 +908,20 @@ def main() -> int:
                 err("Previous pack not acknowledged yet. Wait for 'Unpacked by ...' reply.")
                 return 4
 
+        if args.text:
+            run_wait_step(
+                "Send message",
+                lambda: client.send_message(
+                    to_peer,
+                    args.text,
+                    reply_to=args.reply_to or None,
+                ),
+            )
+            py("Message sent.")
+            if args.config_file and to_peer:
+                update_conf_file(args.config_file, updates={"telegram_to": to_peer})
+            return 0
+
         current_stage = "upload"
         progress_cb, progress_suffix = make_upload_progress_logger()
         run_wait_step(
@@ -909,6 +933,7 @@ def main() -> int:
                 caption=args.caption,
                 progress_callback=progress_cb,
                 timeout_seconds=UPLOAD_TIMEOUT_SECONDS,
+                reply_to=args.reply_to or 0,
             ),
             status_suffix=progress_suffix,
         )

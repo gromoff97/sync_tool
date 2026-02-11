@@ -349,7 +349,7 @@ select_python_for_telegram() {
 }
 
 download_pack_from_telegram() {
-  local out_dir="$1" prefix="$2" project="$3" config_file="$4" machine_name="$5" ack_text="$6"
+  local out_dir="$1" prefix="$2" project="$3" config_file="$4" machine_name="$5" ack_text="$6" meta_file="$7"
   local -a py_cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -363,6 +363,7 @@ download_pack_from_telegram() {
   local path_file
   path_file="$tmp/pulled_path.txt"
   rm -f -- "$path_file" 2>/dev/null || true
+  [[ -n "$meta_file" ]] && rm -f -- "$meta_file" 2>/dev/null || true
 
   local -a cmd
   if have winpty && [[ -t 0 && -t 1 ]]; then
@@ -381,6 +382,7 @@ download_pack_from_telegram() {
     --path-file "$path_file"
     --machine-name "$machine_name"
     --ack-text "$ack_text"
+    --meta-file "$meta_file"
   )
   if [[ -n "$TG_PROXY" ]]; then
     cmd+=(--proxy "$TG_PROXY")
@@ -412,6 +414,9 @@ download_pack_from_telegram() {
   [[ -f "$path_file" ]] || die "Telegram download completed but path file missing."
   PACK_FILE_OVERRIDE="$(tr -d '\r' < "$path_file")"
   [[ -n "$PACK_FILE_OVERRIDE" ]] || die "Telegram download completed but pack path is empty."
+  if [[ -n "$meta_file" && -f "$meta_file" ]]; then
+    PULL_MSG_ID="$(awk -F= '$1==\"message_id\"{print $2}' "$meta_file" | tr -d '\r')"
+  fi
 }
 
 gitpath() { git -C "$1" rev-parse --git-path "$2"; }
@@ -572,6 +577,9 @@ require_tools
 PACK_DIR="${HOME:+$HOME/syncpacks}"
 PACK_PREFIX="syncpack"
 PACK_FILE_OVERRIDE=""
+PULL_MSG_ID=""
+LOG_FILE=""
+META_FILE=""
 PULL_MODE="0"
 
 # defaults per your request
@@ -646,6 +654,101 @@ else
   MODE="bootstrap"
 fi
 
+tmp="$(mktemp_dir)"
+LOG_FILE="$tmp/unpack.log"
+META_FILE="$tmp/pull_meta.txt"
+
+send_ack_message() {
+  [[ "$PULL_MODE" == "1" ]] || return 0
+  [[ -n "$TG_FROM" && -n "$PULL_MSG_ID" ]] || return 0
+  local text="Unpacked by $MACHINE_NAME"
+  local -a py_cmd cmd
+  select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
+  py_cmd=("${PY_CMD[@]}" "-u")
+
+  local script_dir script_path
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  script_path="$script_dir/tg_send.py"
+  [[ -f "$script_path" ]] || return 0
+
+  if have winpty && [[ -t 0 && -t 1 ]]; then
+    py_cmd=("winpty" "${py_cmd[@]}")
+  fi
+
+  cmd=("${py_cmd[@]}" "$script_path"
+    --api-id "$TG_API_ID"
+    --api-hash "$TG_API_HASH"
+    --session "$TG_SESSION"
+    --config-file "$TOOL_DIR/conf/telegram.conf"
+    --to "$TG_FROM"
+    --text "$text"
+    --reply-to "$PULL_MSG_ID"
+    --non-interactive
+  )
+  if [[ -n "$TG_PROXY" ]]; then
+    cmd+=(--proxy "$TG_PROXY")
+  fi
+  if [[ -n "$TG_SESSION_STRING" ]]; then
+    cmd+=(--session-string "$TG_SESSION_STRING")
+  fi
+
+  "${cmd[@]}" >/dev/null 2>&1 || true
+}
+
+send_failure_log() {
+  [[ "$PULL_MODE" == "1" ]] || return 0
+  [[ -n "$TG_FROM" && -n "$PULL_MSG_ID" ]] || return 0
+  [[ -f "$LOG_FILE" ]] || return 0
+  local caption="Unpack failed on $MACHINE_NAME"
+  local -a py_cmd cmd
+  select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
+  py_cmd=("${PY_CMD[@]}" "-u")
+
+  local script_dir script_path
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  script_path="$script_dir/tg_send.py"
+  [[ -f "$script_path" ]] || return 0
+
+  if have winpty && [[ -t 0 && -t 1 ]]; then
+    py_cmd=("winpty" "${py_cmd[@]}")
+  fi
+
+  cmd=("${py_cmd[@]}" "$script_path"
+    --api-id "$TG_API_ID"
+    --api-hash "$TG_API_HASH"
+    --session "$TG_SESSION"
+    --config-file "$TOOL_DIR/conf/telegram.conf"
+    --to "$TG_FROM"
+    --file "$LOG_FILE"
+    --caption "$caption"
+    --reply-to "$PULL_MSG_ID"
+    --non-interactive
+  )
+  if [[ -n "$TG_PROXY" ]]; then
+    cmd+=(--proxy "$TG_PROXY")
+  fi
+  if [[ -n "$TG_SESSION_STRING" ]]; then
+    cmd+=(--session-string "$TG_SESSION_STRING")
+  fi
+
+  "${cmd[@]}" >/dev/null 2>&1 || true
+}
+
+cleanup() {
+  local exit_code=$?
+  if [[ "$exit_code" -ne 0 ]]; then
+    send_failure_log
+  else
+    send_ack_message
+  fi
+  rm -rf "$tmp" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+if [[ "$PULL_MODE" == "1" && -n "$LOG_FILE" ]] && have tee; then
+  exec > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2)
+fi
+
 if [[ "$PULL_MODE" == "1" && -n "$PACK_FILE_OVERRIDE" ]]; then
   die "--pack-file cannot be used together with pull."
 fi
@@ -657,7 +760,8 @@ if [[ "$PULL_MODE" == "1" ]]; then
   require_telegram_config "$TELEGRAM_CONFIG_FILE"
   MACHINE_NAME="$(detect_machine_name)"
   info "Telegram pull..."
-  download_pack_from_telegram "$PACK_DIR" "$PACK_PREFIX" "$PROJECT_NAME" "$TELEGRAM_CONFIG_FILE" "$MACHINE_NAME" "$TG_ACK_TEXT"
+  download_pack_from_telegram "$PACK_DIR" "$PACK_PREFIX" "$PROJECT_NAME" "$TELEGRAM_CONFIG_FILE" "$MACHINE_NAME" "$TG_ACK_TEXT" "$META_FILE"
+  load_telegram_config "$TELEGRAM_CONFIG_FILE"
   PACK_FILE="$PACK_FILE_OVERRIDE"
 elif [[ -n "$PACK_FILE_OVERRIDE" ]]; then
   PACK_FILE="$PACK_FILE_OVERRIDE"
@@ -686,10 +790,6 @@ if [[ "$MODE" == "bootstrap" ]]; then
 else
   info "Repo: $REPO_DIR"
 fi
-
-tmp="$(mktemp_dir)"
-cleanup() { rm -rf "$tmp" 2>/dev/null || true; }
-trap cleanup EXIT
 
 # Safety: archive must contain only expected top-level files
 list="$(tar -tzf "$PACK_FILE" | tr -d '\r')"

@@ -550,7 +550,7 @@ Config:
                        telegram_session or telegram_session_string
                        telegram_phone, telegram_code, telegram_password
                        telegram_proxy (optional, e.g. socks5://user:pass@host:1080)
-                       telegram_ack_scan_limit (default: 200)
+                       telegram_ack_scan_limit (default: 32)
                        (code can be entered interactively)
                        telegram_caption, telegram_python_min
                        default caption (if not set): Packed by **machine_name**
