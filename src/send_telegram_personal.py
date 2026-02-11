@@ -394,13 +394,31 @@ def main() -> int:
     if session_dir:
         os.makedirs(session_dir, exist_ok=True)
 
-    try:
-        from telethon.errors import FloodWaitError, SessionPasswordNeededError, ProxyConnectionError
+    def _import_telethon() -> Tuple[object, object, object, object]:
+        from telethon.errors import FloodWaitError, SessionPasswordNeededError
+        try:
+            from telethon.errors import ProxyConnectionError as _ProxyConnectionError
+        except Exception:
+            _ProxyConnectionError = ConnectionError
         from telethon.sessions import StringSession
         from telethon.sync import TelegramClient
-    except Exception:
-        err("telethon is not installed. Install it with: pip install telethon")
-        return 2
+        return FloodWaitError, SessionPasswordNeededError, _ProxyConnectionError, StringSession, TelegramClient
+
+    try:
+        FloodWaitError, SessionPasswordNeededError, ProxyConnectionError, StringSession, TelegramClient = _import_telethon()
+    except Exception as exc:
+        # Retry once with user site explicitly enabled (Store Python can disable it).
+        try:
+            import site as _site
+            user_site = _site.getusersitepackages()
+            if user_site and user_site not in sys.path:
+                sys.path.append(user_site)
+            FloodWaitError, SessionPasswordNeededError, ProxyConnectionError, StringSession, TelegramClient = _import_telethon()
+        except Exception as exc2:
+            err(f"telethon import failed: {type(exc2).__name__}: {exc2}")
+            err(f"sys.executable: {sys.executable}")
+            err(f"user site: {getattr(_site, 'getusersitepackages', lambda: 'n/a')()}")
+            return 2
 
     # Keep terminal output clean: only our own [PYT]/[ERR] messages.
     telethon_logger = logging.getLogger("telethon")
