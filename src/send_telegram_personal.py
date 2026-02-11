@@ -26,8 +26,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--code", default="")
     parser.add_argument("--password", default="")
     parser.add_argument("--to", default="", help="Username, phone, user ID, or Saved Messages")
-    parser.add_argument("--file", required=True)
+    parser.add_argument("--file", default="")
     parser.add_argument("--caption", default="")
+    parser.add_argument("--mtproto-test", action="store_true", help="Test MTProto connectivity and exit")
     return parser.parse_args()
 
 
@@ -369,9 +370,13 @@ def resolve_required(name: str, raw_value: str, prompt: str, secret: bool = Fals
 def main() -> int:
     args = parse_args()
 
-    if not os.path.isfile(args.file):
-        err(f"file not found: {args.file}")
-        return 1
+    if not args.mtproto_test:
+        if not args.file:
+            err("file is required unless --mtproto-test is set")
+            return 1
+        if not os.path.isfile(args.file):
+            err(f"file not found: {args.file}")
+            return 1
 
     try:
         from colorama import just_fix_windows_console
@@ -492,21 +497,22 @@ def main() -> int:
         api_id = int(api_id_raw)
 
         api_hash = resolve_required("telegram_api_hash", args.api_hash, "Enter telegram_api_hash: ")
-        to_peer = resolve_required("telegram_to", args.to, "Enter telegram_to (@username/phone/id/me): ")
+        to_peer = ""
+        if not args.mtproto_test:
+            to_peer = resolve_required("telegram_to", args.to, "Enter telegram_to (@username/phone/id/me): ")
     except ValueError as exc:
         err(str(exc))
         return 3
 
     # Persist stable values so the next run needs less input.
-    update_conf_file(
-        args.config_file,
-        updates={
-            "telegram_api_id": str(api_id),
-            "telegram_api_hash": api_hash,
-            "telegram_to": to_peer,
-            "telegram_session": session,
-        },
-    )
+    updates = {
+        "telegram_api_id": str(api_id),
+        "telegram_api_hash": api_hash,
+        "telegram_session": session,
+    }
+    if to_peer:
+        updates["telegram_to"] = to_peer
+    update_conf_file(args.config_file, updates=updates)
 
     session_string = (args.session_string or "").strip()
     if looks_like_placeholder(session_string):
@@ -529,6 +535,31 @@ def main() -> int:
     )
     current_stage = "connect"
     try:
+        if args.mtproto_test:
+            py("MTProto test: probes")
+            ok, dns_info = _dns_lookup("telegram.org")
+            py(f"DNS telegram.org: {'ok' if ok else 'fail'} ({dns_info})")
+            ok, dns_info = _dns_lookup("api.telegram.org")
+            py(f"DNS api.telegram.org: {'ok' if ok else 'fail'} ({dns_info})")
+            for host, port in [
+                ("149.154.167.50", 443),
+                ("149.154.167.51", 443),
+                ("149.154.167.91", 443),
+                ("91.108.56.130", 443),
+            ]:
+                ok, info = _probe_tcp(host, port)
+                py(f"TCP {host}:{port} -> {'ok' if ok else 'fail'} ({info})")
+
+            run_wait_step("Connect Telegram", client.connect)
+            py(f"Connected: {client.is_connected()}")
+            py(f"Authorized: {client.is_user_authorized()} (login not attempted in test mode)")
+            dc_id = getattr(client.session, "dc_id", None)
+            server = getattr(client.session, "server_address", None)
+            port = getattr(client.session, "port", None)
+            if dc_id or server or port:
+                py(f"Session DC: {dc_id} {server}:{port}")
+            return 0
+
         run_wait_step("Connect Telegram", client.connect)
 
         if not client.is_user_authorized():

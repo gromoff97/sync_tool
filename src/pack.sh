@@ -317,6 +317,52 @@ send_to_telegram_personal() {
   fi
 }
 
+send_mtproto_test() {
+  local config_file="$1"
+  local py_bin
+  py_bin="$(select_python_for_telegram "$TG_PYTHON_MIN")"
+  python_module_available "$py_bin" "telethon" || die "Python module 'telethon' is not installed for $py_bin. Install it before using --mtproto-test."
+  python_module_available "$py_bin" "colorama" || die "Python module 'colorama' is not installed for $py_bin. Install it before using --mtproto-test."
+
+  local script_dir script_path
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  script_path="$script_dir/send_telegram_personal.py"
+  [[ -f "$script_path" ]] || die "Telegram sender script not found: $script_path"
+
+  local -a cmd
+  local -a py_cmd
+  py_cmd=("$py_bin" "-u")
+  # Git Bash + Windows console Python can lose interactive prompts without winpty.
+  if have winpty && [[ -t 0 && -t 1 ]]; then
+    py_cmd=("winpty" "${py_cmd[@]}")
+  fi
+
+  cmd=("${py_cmd[@]}" "$script_path"
+    --api-id "$TG_API_ID"
+    --api-hash "$TG_API_HASH"
+    --session "$TG_SESSION"
+    --config-file "$config_file"
+    --mtproto-test
+  )
+  if [[ -n "$TG_SESSION_STRING" ]]; then
+    cmd+=(--session-string "$TG_SESSION_STRING")
+  fi
+  if [[ -n "$TG_PHONE" ]]; then
+    cmd+=(--phone "$TG_PHONE")
+  fi
+  if [[ -n "$TG_TO" ]]; then
+    cmd+=(--to "$TG_TO")
+  fi
+
+  if [[ -z "$C_RESET" ]]; then
+    NO_COLOR=1 "${cmd[@]}"
+  elif [[ "$USE_256_COLOR" == "1" ]]; then
+    FORCE_COLOR=1 FORCE_256_COLOR=1 "${cmd[@]}"
+  else
+    FORCE_COLOR=1 "${cmd[@]}"
+  fi
+}
+
 gitpath() { git -C "$1" rev-parse --git-path "$2"; }
 
 repo_roots_fingerprint() {
@@ -366,6 +412,7 @@ Optional (defaults):
   --pack-prefix PREFIX       (default: syncpack)
   --machine-name NAME        (default: auto-detected; written to manifest only)
   -s                         send archive from personal account using <tool_dir>/conf/telegram.conf
+  --mtproto-test             test MTProto connectivity using <tool_dir>/conf/telegram.conf
   --help
 
 Config:
@@ -396,6 +443,7 @@ OUTPUT_DIR="${HOME:+$HOME/syncpacks}"
 PACK_PREFIX="syncpack"
 MACHINE_NAME=""
 SEND_TO_TELEGRAM="0"
+MTProto_TEST="0"
 TG_API_ID=""
 TG_API_HASH=""
 TG_TO=""
@@ -413,13 +461,16 @@ while [[ $# -gt 0 ]]; do
     --machine-name)    MACHINE_NAME="${2:-}"; shift 2;;
     --machine-name=*)  MACHINE_NAME="${1#*=}"; shift 1;;
     -s)               SEND_TO_TELEGRAM="1"; shift 1;;
+    --mtproto-test)    MTProto_TEST="1"; shift 1;;
     --help|-h)         usage;;
     *) die "Unknown option: $1 (use --help)";;
   esac
 done
 
 REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-[[ -n "$REPO_DIR" ]] || die "Run pack.sh inside a git repository."
+if [[ -z "$REPO_DIR" && "$MTProto_TEST" != "1" ]]; then
+  die "Run pack.sh inside a git repository."
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -429,6 +480,14 @@ load_config_overrides "$CONFIG_FILE"
 
 [[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
 [[ -n "$OUTPUT_DIR" ]] || die "HOME is not set; use --output-dir PATH."
+
+if [[ "$MTProto_TEST" == "1" ]]; then
+  TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
+  load_telegram_config "$TELEGRAM_CONFIG_FILE"
+  log_pack "MTProto test..."
+  send_mtproto_test "$TELEGRAM_CONFIG_FILE"
+  exit $?
+fi
 
 if [[ -z "$MACHINE_NAME" ]]; then
   MACHINE_NAME="$(detect_machine_name)"
