@@ -574,6 +574,7 @@ Optional (defaults):
   --pack-prefix PREFIX         (default: syncpack)
   --project-name NAME          (default: autodetect from current repo or selected pack)
   --peer NAME                  (default: sync)
+  --dry-run                    show what would be done without applying
   --ff-only 0|1                (default: 1)
   --force-tags 0|1             (default: 0)
   --prune-remote-refs 0|1      (default: 1)
@@ -612,6 +613,7 @@ STATE_LAST_FILE=""
 STATE_SAVE_PENDING="0"
 PULL_SKIP_ACK="0"
 PULL_SKIP_FAILLOG="0"
+DRY_RUN="0"
 PULL_MODE="0"
 
 # defaults per your request
@@ -652,6 +654,7 @@ while [[ $# -gt 0 ]]; do
     --prune-local-branches=*) PRUNE_LOCAL_BRANCHES="${1#*=}"; shift 1;;
     --clean-peer-refs)        CLEAN_PEER_REFS="${2:-}"; shift 2;;
     --clean-peer-refs=*)      CLEAN_PEER_REFS="${1#*=}"; shift 1;;
+    --dry-run)                DRY_RUN="1"; shift 1;;
 
     --help|-h)                usage;;
     *) die "Unknown option: $1 (use --help)";;
@@ -799,12 +802,27 @@ if [[ "$PULL_MODE" == "1" ]]; then
   load_telegram_config "$TELEGRAM_CONFIG_FILE"
   require_telegram_config "$TELEGRAM_CONFIG_FILE"
   MACHINE_NAME="$(detect_machine_name)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "Dry-run: would pull latest pack from Telegram for project '$PROJECT_NAME'."
+    PULL_SKIP_ACK="1"
+    PULL_SKIP_FAILLOG="1"
+    exit 0
+  fi
   info "Telegram pull..."
   download_pack_from_telegram "$PACK_DIR" "$PACK_PREFIX" "$PROJECT_NAME" "$TELEGRAM_CONFIG_FILE" "$MACHINE_NAME" "$TG_ACK_TEXT" "$META_FILE"
   load_telegram_config "$TELEGRAM_CONFIG_FILE"
   PACK_FILE="$PACK_FILE_OVERRIDE"
   if [[ -n "$PULL_MSG_ID" || -n "$PULL_FILE_NAME" ]]; then
     load_pull_state
+    if [[ -n "$PULL_MSG_ID" && -n "$STATE_LAST_MSG_ID" && "$PULL_MSG_ID" =~ ^[0-9]+$ && "$STATE_LAST_MSG_ID" =~ ^[0-9]+$ ]]; then
+      if [[ "$PULL_MSG_ID" -le "$STATE_LAST_MSG_ID" ]]; then
+        info "Pack message_id not newer than last pulled ($STATE_LAST_MSG_ID). Skipping."
+        PULL_SKIP_ACK="1"
+        PULL_SKIP_FAILLOG="1"
+        [[ -n "$PACK_FILE" && -f "$PACK_FILE" ]] && rm -f -- "$PACK_FILE" 2>/dev/null || true
+        exit 0
+      fi
+    fi
     if [[ -n "$PULL_MSG_ID" && "$PULL_MSG_ID" == "$STATE_LAST_MSG_ID" ]]; then
       info "Pack already pulled (message_id=$PULL_MSG_ID). Skipping."
       PULL_SKIP_ACK="1"
@@ -849,6 +867,13 @@ if [[ "$MODE" == "bootstrap" ]]; then
   info "Create repo: $TARGET_REPO"
 else
   info "Repo: $REPO_DIR"
+fi
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  info "Dry-run: would apply pack to $MODE repository."
+  PULL_SKIP_ACK="1"
+  PULL_SKIP_FAILLOG="1"
+  exit 0
 fi
 
 # Safety: archive must contain only expected top-level files
@@ -997,22 +1022,24 @@ else
   git -C "$REPO_DIR" fetch "$bundle" "refs/tags/*:refs/tags/*" >/dev/null 2>/dev/null || true
 fi
 
-if [[ "$FORCE_TAGS" == "0" ]]; then
-  tag_conflicts=()
-  while read -r sha ref; do
-    [[ -n "$sha" && -n "$ref" ]] || continue
-    [[ "$ref" == refs/tags/* ]] || continue
-    tag="${ref#refs/tags/}"
-    if git -C "$REPO_DIR" show-ref --verify --quiet "refs/tags/$tag"; then
-      local_sha="$(git -C "$REPO_DIR" rev-parse "refs/tags/$tag")"
-      if [[ "$local_sha" != "$sha" ]]; then
-        tag_conflicts+=("$tag")
-      fi
+tag_conflicts=()
+while read -r sha ref; do
+  [[ -n "$sha" && -n "$ref" ]] || continue
+  [[ "$ref" == refs/tags/* ]] || continue
+  tag="${ref#refs/tags/}"
+  if git -C "$REPO_DIR" show-ref --verify --quiet "refs/tags/$tag"; then
+    local_sha="$(git -C "$REPO_DIR" rev-parse "refs/tags/$tag")"
+    if [[ "$local_sha" != "$sha" ]]; then
+      tag_conflicts+=("$tag")
     fi
-  done < "$incoming_refs"
+  fi
+done < "$incoming_refs"
 
-  if [[ "${#tag_conflicts[@]}" -gt 0 ]]; then
+if [[ "${#tag_conflicts[@]}" -gt 0 ]]; then
+  if [[ "$FORCE_TAGS" == "0" ]]; then
     warn "Tag conflicts (not updated without --force-tags 1): ${tag_conflicts[*]}"
+  elif [[ "$FF_ONLY" == "1" ]]; then
+    die "Tag conflicts with --ff-only 1: ${tag_conflicts[*]}"
   fi
 fi
 

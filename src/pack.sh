@@ -265,6 +265,7 @@ load_push_state() {
     case "$key" in
       last_file) STATE_LAST_FILE="$value" ;;
       last_ts) STATE_LAST_TS="$value" ;;
+      last_message_id) STATE_LAST_MSG_ID="$value" ;;
       *) ;;
     esac
   done < "$STATE_FILE"
@@ -276,6 +277,7 @@ save_push_state() {
   {
     [[ -n "$STATE_LAST_FILE" ]] && echo "last_file=$STATE_LAST_FILE"
     [[ -n "$STATE_LAST_TS" ]] && echo "last_ts=$STATE_LAST_TS"
+    [[ -n "$STATE_LAST_MSG_ID" ]] && echo "last_message_id=$STATE_LAST_MSG_ID"
   } > "$STATE_FILE"
 }
 
@@ -416,7 +418,7 @@ select_python_for_telegram() {
 }
 
 send_to_telegram_personal() {
-  local file="$1" caption="$2" config_file="$3"
+  local file="$1" caption="$2" config_file="$3" meta_file="$4" last_msg_id="$5"
   local -a py_cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -444,8 +446,14 @@ send_to_telegram_personal() {
     --file "$file"
     --non-interactive
   )
+  if [[ -n "$meta_file" ]]; then
+    cmd+=(--meta-file "$meta_file")
+  fi
   if [[ "$TG_ACK_REQUIRED" == "1" ]]; then
     cmd+=(--require-ack --ack-text "$TG_ACK_TEXT" --scan-limit "$TG_ACK_SCAN_LIMIT")
+    if [[ -n "$last_msg_id" ]]; then
+      cmd+=(--last-message-id "$last_msg_id")
+    fi
   fi
   if [[ -n "$TG_PROXY" ]]; then
     cmd+=(--proxy "$TG_PROXY")
@@ -572,6 +580,7 @@ Optional (defaults):
   --machine-name NAME        (default: auto-detected; written to manifest only)
   push                       send archive from personal account using <tool_dir>/conf/telegram.conf
   -s                         same as push (legacy)
+  --dry-run                  show what would be done without creating/sending
   --mproto-login             interactive MTProto login + connection test, writes <tool_dir>/conf/telegram.conf
   --help
 
@@ -618,6 +627,8 @@ STATE_FILE=""
 STATE_LAST_FILE=""
 STATE_LAST_TS=""
 STATE_SAVE_PENDING="0"
+STATE_LAST_MSG_ID=""
+DRY_RUN="0"
 
 while [[ $# -gt 0 ]]; do
   if [[ "$1" == "push" ]]; then
@@ -634,6 +645,7 @@ while [[ $# -gt 0 ]]; do
     --machine-name)    MACHINE_NAME="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
     --machine-name=*)  MACHINE_NAME="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     -s)               SEND_TO_TELEGRAM="1"; OTHER_OPTS_USED="1"; shift 1;;
+    --dry-run)         DRY_RUN="1"; shift 1;;
     --mproto-login)    MPROTO_LOGIN="1"; shift 1;;
     --help|-h)         usage;;
     *) die "Unknown option: $1 (use --help)";;
@@ -745,6 +757,14 @@ ts="$(date +%Y%m%d_%H%M%S 2>/dev/null || date +%Y%m%d_%H%M%S)"
 final="${PACK_PREFIX}_${PROJECT_NAME}_${ts}.tgz"
 final_path="$OUTPUT_DIR/$final"
 
+if [[ "$DRY_RUN" == "1" ]]; then
+  log_pack "Dry-run: would create $final_path"
+  if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
+    log_pack "Dry-run: would send to Telegram"
+  fi
+  exit 0
+fi
+
 tmp_out="$OUTPUT_DIR/.${final}.tmp.$$"
 rm -f "$tmp_out" 2>/dev/null || true
 
@@ -792,13 +812,19 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
 
   log_pack "Telegram send..."
   DELETE_FINAL_ON_EXIT="1"
-  send_to_telegram_personal "$final_path" "$TG_CAPTION" "$TELEGRAM_CONFIG_FILE"
+  meta_path="$tmp/push_meta.txt"
+  rm -f -- "$meta_path" 2>/dev/null || true
+  send_to_telegram_personal "$final_path" "$TG_CAPTION" "$TELEGRAM_CONFIG_FILE" "$meta_path" "$STATE_LAST_MSG_ID"
   rm -f -- "$final_path" || die "Uploaded to Telegram, but failed to delete local pack: $final_path"
   DELETE_FINAL_ON_EXIT="0"
   log_ok "Removed: $final_path"
 
   STATE_LAST_FILE="$final"
   STATE_LAST_TS="$ts"
+  if [[ -f "$meta_path" ]]; then
+    msg_id="$(awk -F= '$1=="message_id"{print $2}' "$meta_path" | tr -d '\r')"
+    [[ -n "$msg_id" ]] && STATE_LAST_MSG_ID="$msg_id"
+  fi
   save_push_state
 else
   log_ok "Pack: $final_path"
