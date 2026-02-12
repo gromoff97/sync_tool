@@ -48,7 +48,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mtproto-test", dest="mproto_login", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--list-chats", action="store_true", help="List available chats with peer_id/access_hash")
     parser.add_argument("--chat-filter", default="", help="Filter for list-chats (substring match)")
-    parser.add_argument("--timeout", type=int, default=20, help="Transfer timeout in seconds")
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values")
     return parser.parse_args()
 
@@ -113,7 +112,6 @@ LIVE_STATUS_ENABLED = sys.stdout.isatty()
 _LIVE_STATUS_LOCK = threading.Lock()
 _LIVE_STATUS_ACTIVE = False
 _LIVE_STATUS_WIDTH = 0
-UPLOAD_TIMEOUT_SECONDS = 20
 NON_INTERACTIVE = False
 
 if USE_256_COLOR:
@@ -270,7 +268,6 @@ def send_file_with_timeout(
     file_path: str,
     caption: str,
     progress_callback: Callable[[int, int], None],
-    timeout_seconds: int,
     reply_to: int = 0,
 ) -> object:
     async def _upload() -> object:
@@ -283,9 +280,7 @@ def send_file_with_timeout(
             reply_to=reply_to or None,
         )
 
-    return client.loop.run_until_complete(
-        asyncio.wait_for(_upload(), timeout=timeout_seconds)
-    )
+    return client.loop.run_until_complete(_upload())
 
 
 def download_file_with_timeout(
@@ -293,7 +288,6 @@ def download_file_with_timeout(
     message: object,
     dest_path: str,
     progress_callback: Callable[[int, int], None],
-    timeout_seconds: int,
 ) -> object:
     async def _download() -> object:
         return await client.download_media(
@@ -302,9 +296,7 @@ def download_file_with_timeout(
             progress_callback=progress_callback,
         )
 
-    return client.loop.run_until_complete(
-        asyncio.wait_for(_download(), timeout=timeout_seconds)
-    )
+    return client.loop.run_until_complete(_download())
 
 
 def looks_like_placeholder(value: str) -> bool:
@@ -493,9 +485,8 @@ def resolve_required(name: str, raw_value: str, prompt: str, secret: bool = Fals
 
 def main() -> int:
     args = parse_args()
-    global NON_INTERACTIVE, UPLOAD_TIMEOUT_SECONDS
+    global NON_INTERACTIVE
     NON_INTERACTIVE = bool(args.non_interactive)
-    UPLOAD_TIMEOUT_SECONDS = max(1, int(args.timeout or 20))
 
     if not args.mproto_login:
         if args.list_chats:
@@ -616,7 +607,6 @@ def main() -> int:
         _err_detail(f"  session: {os.path.expanduser(args.session or '~/.sync_tool_telegram')}")
         _err_detail(f"  session_string: {'set' if (args.session_string or '').strip() else 'unset'}")
         _err_detail(f"  proxy: {format_proxy_for_log(proxy_raw)}")
-        _err_detail(f"  timeout: {UPLOAD_TIMEOUT_SECONDS}s")
         _err_detail(f"  ack_required: {args.require_ack}")
         if args.last_message_id:
             _err_detail(f"  last_message_id: {args.last_message_id}")
@@ -918,7 +908,6 @@ def main() -> int:
                     message=best_msg,
                     dest_path=tmp_path,
                     progress_callback=progress_cb,
-                    timeout_seconds=UPLOAD_TIMEOUT_SECONDS,
                 ),
                 status_suffix=progress_suffix,
             )
@@ -1012,7 +1001,6 @@ def main() -> int:
                 file_path=args.file,
                 caption=args.caption,
                 progress_callback=progress_cb,
-                timeout_seconds=UPLOAD_TIMEOUT_SECONDS,
                 reply_to=args.reply_to or 0,
             ),
             status_suffix=progress_suffix,
@@ -1037,10 +1025,6 @@ def main() -> int:
     except KeyboardInterrupt:
         err("Interrupted by user.")
         return 130
-    except asyncio.TimeoutError as exc:
-        err(f"Telegram timeout after {UPLOAD_TIMEOUT_SECONDS}s (stage={current_stage}).")
-        diagnose_connection_failure(current_stage, exc)
-        return 1
     except ProxyConnectionError as exc:
         err(f"Telegram proxy connection failed (stage={current_stage}).")
         diagnose_connection_failure(current_stage, exc)

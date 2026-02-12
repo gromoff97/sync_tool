@@ -181,7 +181,6 @@ load_telegram_config() {
   TG_PROXY=""
   TG_ACK_TEXT="Unpacked by"
   TG_PYTHON_MIN="3.8"
-  TG_TRANSFER_TIMEOUT="20"
 
   [[ -f "$cfg" ]] || return 0
 
@@ -208,14 +207,12 @@ load_telegram_config() {
       telegram_password|TELEGRAM_PASSWORD|password|PASSWORD) TG_PASSWORD="$value" ;;
       telegram_proxy|TELEGRAM_PROXY|proxy|PROXY) TG_PROXY="$value" ;;
       telegram_python_min|TELEGRAM_PYTHON_MIN|python_min|PYTHON_MIN) TG_PYTHON_MIN="$value" ;;
-      telegram_transfer_timeout|TELEGRAM_TRANSFER_TIMEOUT|transfer_timeout|TRANSFER_TIMEOUT) TG_TRANSFER_TIMEOUT="$value" ;;
       *) ;;
     esac
   done < "$cfg"
 
   [[ -z "$TG_API_ID" || "$TG_API_ID" =~ ^[0-9]+$ ]] || die "telegram_api_id must be an integer in $cfg"
   [[ "$TG_PYTHON_MIN" =~ ^[0-9]+\.[0-9]+$ ]] || die "telegram_python_min must be MAJOR.MINOR in $cfg"
-  [[ "$TG_TRANSFER_TIMEOUT" =~ ^[0-9]+$ ]] || die "telegram_transfer_timeout must be an integer (seconds) in $cfg"
 }
 
 require_telegram_config() {
@@ -387,9 +384,6 @@ download_pack_from_telegram() {
     --ack-text "$ack_text"
     --meta-file "$meta_file"
   )
-  if [[ -n "$TG_TRANSFER_TIMEOUT" ]]; then
-    cmd+=(--timeout "$TG_TRANSFER_TIMEOUT")
-  fi
   if [[ -n "$TG_PROXY" ]]; then
     cmd+=(--proxy "$TG_PROXY")
   fi
@@ -600,8 +594,7 @@ Options (same as unpack):
 Config:
   <tool_dir>/conf/telegram.conf is required for pull.
   Supported keys: telegram_api_id, telegram_api_hash, telegram_from (optional),
-                  telegram_session/session_string, telegram_proxy, telegram_python_min,
-                  telegram_transfer_timeout (seconds, default: 20)
+                  telegram_session/session_string, telegram_proxy, telegram_python_min
 
 Example:
   ./unpack pull
@@ -741,9 +734,6 @@ send_ack_message() {
     --reply-to "$PULL_MSG_ID"
     --non-interactive
   )
-  if [[ -n "$TG_TRANSFER_TIMEOUT" ]]; then
-    cmd+=(--timeout "$TG_TRANSFER_TIMEOUT")
-  fi
   if [[ -n "$TG_PROXY" ]]; then
     cmd+=(--proxy "$TG_PROXY")
   fi
@@ -783,9 +773,6 @@ send_failure_log() {
     --reply-to "$PULL_MSG_ID"
     --non-interactive
   )
-  if [[ -n "$TG_TRANSFER_TIMEOUT" ]]; then
-    cmd+=(--timeout "$TG_TRANSFER_TIMEOUT")
-  fi
   if [[ -n "$TG_PROXY" ]]; then
     cmd+=(--proxy "$TG_PROXY")
   fi
