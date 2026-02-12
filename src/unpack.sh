@@ -998,49 +998,40 @@ incoming_refs="$tmp/incoming_refs.txt"
 git bundle list-heads "$bundle" 2>/dev/null | tr -d '\r' > "$incoming_refs" || die "Failed to list heads from bundle"
 
 if [[ "$MODE" == "existing" ]]; then
+  info "Compare pack refs with local refs"
+  incoming_heads="$tmp/incoming_heads.tsv"
+  incoming_tags="$tmp/incoming_tags.tsv"
+  local_heads="$tmp/local_heads.tsv"
+  local_tags="$tmp/local_tags.tsv"
+  incoming_heads_list="$tmp/incoming_heads.txt"
+  incoming_tags_list="$tmp/incoming_tags.txt"
+  local_heads_list="$tmp/local_heads.txt"
+  local_tags_list="$tmp/local_tags.txt"
+
+  awk '$2 ~ /^refs\/heads\// {sub("^refs/heads/","",$2); print $2 "\t" $1}' "$incoming_refs" | sort -u > "$incoming_heads"
+  awk '$2 ~ /^refs\/tags\// {sub("^refs/tags/","",$2); print $2 "\t" $1}' "$incoming_refs" | sort -u > "$incoming_tags"
+
+  git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2) %(objectname)' refs/heads | tr -d '\r' \
+    | awk '{print $1 "\t" $2}' | sort -u > "$local_heads"
+  git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2) %(objectname)' refs/tags | tr -d '\r' \
+    | awk '{print $1 "\t" $2}' | sort -u > "$local_tags"
+
   identical="1"
-  while read -r sha ref; do
-    [[ -n "$sha" && -n "$ref" ]] || continue
-    if [[ "$ref" == refs/heads/* ]]; then
-      b="${ref#refs/heads/}"
-      if ! git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
-        identical="0"
-        break
-      fi
-      local_sha="$(git -C "$REPO_DIR" rev-parse "refs/heads/$b")"
-      if [[ "$local_sha" != "$sha" ]]; then
-        identical="0"
-        break
-      fi
-    elif [[ "$ref" == refs/tags/* ]]; then
-      t="${ref#refs/tags/}"
-      if ! git -C "$REPO_DIR" show-ref --verify --quiet "refs/tags/$t"; then
-        identical="0"
-        break
-      fi
-      local_sha="$(git -C "$REPO_DIR" rev-parse "refs/tags/$t")"
-      if [[ "$local_sha" != "$sha" ]]; then
-        identical="0"
-        break
-      fi
-    fi
-  done < "$incoming_refs"
+  if ! cmp -s "$incoming_heads" "$local_heads"; then
+    identical="0"
+  elif ! cmp -s "$incoming_tags" "$local_tags"; then
+    identical="0"
+  fi
 
   if [[ "$identical" == "1" ]]; then
-    incoming_heads="$tmp/incoming_heads.txt"
-    incoming_tags="$tmp/incoming_tags.txt"
-    local_heads="$tmp/local_heads.txt"
-    local_tags="$tmp/local_tags.txt"
+    awk -F'\t' '{print $1}' "$incoming_heads" > "$incoming_heads_list"
+    awk -F'\t' '{print $1}' "$incoming_tags" > "$incoming_tags_list"
+    awk -F'\t' '{print $1}' "$local_heads" > "$local_heads_list"
+    awk -F'\t' '{print $1}' "$local_tags" > "$local_tags_list"
 
-    awk '$2 ~ /^refs\/heads\// {sub("^refs/heads/","",$2); print $2}' "$incoming_refs" | sort -u > "$incoming_heads"
-    awk '$2 ~ /^refs\/tags\// {sub("^refs/tags/","",$2); print $2}' "$incoming_refs" | sort -u > "$incoming_tags"
-
-    git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2)' refs/heads | tr -d '\r' | sort -u > "$local_heads"
-    git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2)' refs/tags  | tr -d '\r' | sort -u > "$local_tags"
-
-    if ! cmp -s "$incoming_heads" "$local_heads"; then
+    if ! cmp -s "$incoming_heads_list" "$local_heads_list"; then
       identical="0"
-    elif ! cmp -s "$incoming_tags" "$local_tags"; then
+    elif ! cmp -s "$incoming_tags_list" "$local_tags_list"; then
       identical="0"
     fi
   fi
