@@ -193,6 +193,9 @@ load_config_overrides() {
       branches|BRANCHES)           BRANCHES_RAW="$value" ;;
       branch|BRANCH)               BRANCHES_RAW="$value" ;;
       with_tags|WITH_TAGS)         WITH_TAGS="$value" ;;
+      update_remote|UPDATE_REMOTE) UPDATE_REMOTE="$value" ;;
+      remote|REMOTE)               REMOTE_NAME="$value" ;;
+      recent_months|RECENT_MONTHS) RECENT_MONTHS="$value" ;;
       *) ;;
     esac
   done < "$cfg"
@@ -320,19 +323,85 @@ python_candidates_from_globs() {
   shopt -u nullglob
 }
 
+compute_cutoff_epoch() {
+  local months="$1"
+  local cutoff=""
+  if date -d "now - ${months} months" +%s >/dev/null 2>&1; then
+    cutoff="$(date -d "now - ${months} months" +%s)"
+  elif have python; then
+    cutoff="$(python - <<'PY' "$months"
+import sys, datetime
+months=int(sys.argv[1])
+now=datetime.datetime.utcnow()
+year=now.year
+month=now.month-months
+while month<=0:
+    month+=12
+    year-=1
+day=min(now.day, 28)
+cut=datetime.datetime(year, month, day, now.hour, now.minute, now.second)
+print(int(cut.timestamp()))
+PY
+)"
+  else
+    die "Cannot compute recent cutoff date (no GNU date -d, no python)."
+  fi
+  printf '%s' "$cutoff"
+}
+
+fetch_recent_remote_branches() {
+  local remote="$1"
+  local months="$2"
+  [[ -n "$remote" ]] || die "--remote is required with -u"
+  [[ -n "$months" ]] || months="3"
+  log_git "Fetch remote: $remote (recent ${months} months)"
+  git -C "$REPO_DIR" fetch --prune "$remote" >/dev/null 2>&1 || die "Failed to fetch remote '$remote'"
+
+  local cutoff
+  cutoff="$(compute_cutoff_epoch "$months")"
+  [[ -n "$cutoff" ]] || die "Failed to compute recent cutoff."
+
+  mapfile -t recent_branches < <(
+    git -C "$REPO_DIR" for-each-ref --format='%(committerdate:unix) %(refname:strip=3)' "refs/remotes/$remote/" \
+      | tr -d '\r' \
+      | awk -v cutoff="$cutoff" -v r="$remote/" '$1>=cutoff {ref=$2; sub("^" r, "", ref); if(ref!="HEAD") print ref}'
+  )
+
+  if [[ "${#recent_branches[@]}" -eq 0 ]]; then
+    die "No remote branches updated in the last ${months} months."
+  fi
+
+  for b in "${recent_branches[@]}"; do
+    if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
+      if git -C "$REPO_DIR" merge-base --is-ancestor "$b" "$remote/$b"; then
+        if [[ "$(git -C "$REPO_DIR" symbolic-ref --short -q HEAD 2>/dev/null || true)" == "$b" ]]; then
+          git -C "$REPO_DIR" merge --ff-only "$remote/$b" >/dev/null || die "Cannot fast-forward branch '$b' from '$remote'."
+        else
+          git -C "$REPO_DIR" update-ref "refs/heads/$b" "$remote/$b" >/dev/null
+        fi
+      else
+        die "Local branch '$b' diverged from '$remote/$b'. Resolve before pack -u."
+      fi
+    else
+      git -C "$REPO_DIR" branch "$b" "$remote/$b" >/dev/null 2>&1 || true
+    fi
+  done
+  BRANCHES_RAW="$(IFS=','; printf '%s' "${recent_branches[*]}")"
+}
+
 select_default_remote() {
   local remotes
   remotes="$(git -C "$REPO_DIR" remote 2>/dev/null | tr -d '\r')"
   [[ -n "$remotes" ]] || return 1
   if echo "$remotes" | awk 'NR==1{first=$0} END{print NR, first}' | awk '{exit ($1==1)?0:1}'; then
-    printf '%s' "$remotes" | head -n 1
+    printf '%s' "$remotes" | awk 'NR==1{print; exit}'
     return 0
   fi
   if git -C "$REPO_DIR" remote | grep -qx "origin"; then
     printf '%s' "origin"
     return 0
   fi
-  printf '%s' "$remotes" | head -n 1
+  printf '%s' "$remotes" | awk 'NR==1{print; exit}'
 }
 
 ensure_branch_available() {
@@ -580,6 +649,9 @@ Options:
   --output-dir PATH        default: ~/syncpacks
   --pack-prefix PREFIX     default: syncpack
   --machine-name NAME      default: auto-detected; written to manifest only
+  -u, --update-remote      fetch recent branches from remote before pack
+  --remote NAME            remote name required with -u
+  --recent-months N        how many months back is "recent" (default: 3)
   --branch NAME            pack only this branch (no tags by default)
   --branches LIST          pack only these branches (comma-separated)
   --with-tags 0|1          include tags (default: 1 for all branches, 0 for selected branches)
@@ -609,6 +681,9 @@ Options (same as pack):
   --output-dir PATH        default: ~/syncpacks
   --pack-prefix PREFIX     default: syncpack
   --machine-name NAME      default: auto-detected; written to manifest only
+  -u, --update-remote      fetch recent branches from remote before pack
+  --remote NAME            remote name required with -u
+  --recent-months N        how many months back is "recent" (default: 3)
   --branch NAME            pack only this branch (no tags by default)
   --branches LIST          pack only these branches (comma-separated)
   --with-tags 0|1          include tags (default: 1 for all branches, 0 for selected branches)
@@ -834,6 +909,9 @@ DELETE_FINAL_ON_EXIT="0"
 DRY_RUN="0"
 BRANCHES_RAW=""
 WITH_TAGS=""
+UPDATE_REMOTE="0"
+REMOTE_NAME=""
+RECENT_MONTHS="3"
 
 want_push_help="0"
 want_help="0"
@@ -861,6 +939,11 @@ while [[ $# -gt 0 ]]; do
     --pack-prefix=*)   PACK_PREFIX="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     --machine-name)    MACHINE_NAME="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
     --machine-name=*)  MACHINE_NAME="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
+    -u|--update-remote) UPDATE_REMOTE="1"; OTHER_OPTS_USED="1"; shift 1;;
+    --remote)          REMOTE_NAME="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
+    --remote=*)        REMOTE_NAME="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
+    --recent-months)   RECENT_MONTHS="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
+    --recent-months=*) RECENT_MONTHS="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     --branch)          BRANCHES_RAW="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
     --branch=*)        BRANCHES_RAW="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     --branches)        BRANCHES_RAW="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
@@ -902,6 +985,12 @@ fi
 if [[ -n "$WITH_TAGS" && "$WITH_TAGS" != "0" && "$WITH_TAGS" != "1" ]]; then
   die "--with-tags must be 0|1"
 fi
+if [[ -n "$UPDATE_REMOTE" && "$UPDATE_REMOTE" != "0" && "$UPDATE_REMOTE" != "1" ]]; then
+  die "update_remote must be 0|1"
+fi
+if [[ -n "$RECENT_MONTHS" && ! "$RECENT_MONTHS" =~ ^[0-9]+$ ]]; then
+  die "--recent-months must be an integer"
+fi
 
 if [[ "$MPROTO_LOGIN" == "1" ]]; then
   TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
@@ -934,6 +1023,12 @@ MACHINE_NAME="$(sanitize_for_manifest "$MACHINE_NAME")"
 
 PROJECT_NAME="$(basename "$REPO_DIR")"
 PROJECT_NAME="$(sanitize_for_manifest "$PROJECT_NAME")"
+
+if [[ "$UPDATE_REMOTE" == "1" ]]; then
+  [[ -n "$REMOTE_NAME" ]] || die "--remote is required with -u/--update-remote"
+  [[ -z "$BRANCHES_RAW" ]] || die "-u cannot be combined with --branch/--branches"
+  fetch_recent_remote_branches "$REMOTE_NAME" "$RECENT_MONTHS"
+fi
 
 mkdir -p "$OUTPUT_DIR" || die "Cannot create --output-dir: $OUTPUT_DIR"
 if is_within_repo "$REPO_DIR" "$OUTPUT_DIR"; then
