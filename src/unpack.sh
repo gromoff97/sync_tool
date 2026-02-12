@@ -794,6 +794,13 @@ cleanup() {
       send_ack_message
     fi
   fi
+  if [[ "$PULL_MODE" == "1" && -n "${PACK_FILE:-}" && -f "$PACK_FILE" ]]; then
+    if rm -f -- "$PACK_FILE" 2>/dev/null; then
+      info "Pack deleted after pull: $PACK_FILE"
+    else
+      warn "Failed to delete pack after pull: $PACK_FILE"
+    fi
+  fi
   rm -rf "$tmp" 2>/dev/null || true
 }
 trap cleanup EXIT
