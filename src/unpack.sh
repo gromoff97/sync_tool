@@ -756,13 +756,13 @@ send_ack_message() {
   [[ -n "$TG_FROM" && -n "$PULL_MSG_ID" ]] || return 0
   local prefix="Closed by"
   local reason="${ACK_NOTE:-UNPACKED}"
-  local suffix=""
+  local reason_text=""
   case "$reason" in
-    NO_CHANGES) suffix=" (no changes)" ;;
-    DIVERGED) suffix=" (diverged)" ;;
-    FAILED) suffix=" (failed)" ;;
-    UNPACKED) suffix=" (unpacked)" ;;
-    *) suffix=" (${reason})" ;;
+    NO_CHANGES) reason_text="no changes" ;;
+    DIVERGED) reason_text="diverged" ;;
+    FAILED) reason_text="failed" ;;
+    UNPACKED) reason_text="unpacked" ;;
+    *) reason_text="${reason}" ;;
   esac
   local md_name
   md_name="$(escape_md "$MACHINE_NAME")"
@@ -770,9 +770,9 @@ send_ack_message() {
   if [[ -n "$details" ]]; then
     details="$(escape_md "$details")"
   fi
-  local text="${prefix} **${md_name}**${suffix}"
+  local text="${prefix} **${md_name}**"$'\n'"reason: ${reason_text}"
   if [[ -n "$details" ]]; then
-    text="${text} ${details}"
+    text="${text}"$'\n'"${details}"
   fi
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
@@ -812,7 +812,7 @@ send_failure_log() {
   [[ "$PULL_MODE" == "1" ]] || return 0
   [[ -n "$TG_FROM" && -n "$PULL_MSG_ID" ]] || return 0
   [[ -f "$LOG_FILE" ]] || return 0
-  local caption="Unpack failed on $MACHINE_NAME"
+  local caption="Unpack failed on **$(escape_md "$MACHINE_NAME")**"$'\n'"reason: failed"
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -1163,17 +1163,20 @@ if [[ "$FF_ONLY" == "1" ]]; then
         *) unknown_list+=("${diverged[$i]}") ;;
       esac
     done
-    details=""
+    details_lines=()
     if [[ "${#older_list[@]}" -gt 0 ]]; then
-      details="${details} old:${older_list[*]}"
+      details_lines+=("old: ${older_list[*]}")
     fi
     if [[ "${#newer_list[@]}" -gt 0 ]]; then
-      [[ -n "$details" ]] && details="${details};"
-      details="${details} new:${newer_list[*]}"
+      details_lines+=("new: ${newer_list[*]}")
     fi
     if [[ "${#unknown_list[@]}" -gt 0 ]]; then
-      [[ -n "$details" ]] && details="${details};"
-      details="${details} unknown:${unknown_list[*]}"
+      details_lines+=("unknown: ${unknown_list[*]}")
+    fi
+    details=""
+    if [[ "${#details_lines[@]}" -gt 0 ]]; then
+      details="$(printf '%s\n' "${details_lines[@]}")"
+      details="${details%$'\n'}"
     fi
     if [[ "$PULL_MODE" == "1" && -t 0 ]]; then
       read -r -p "Send close message to allow next pack? [y/N] " _close_ans

@@ -695,7 +695,7 @@ send_telegram_close() {
 
   local text="Closed by **$(escape_md "$MACHINE_NAME")**"
   if [[ -n "$reason" ]]; then
-    text="${text} (${reason})"
+    text="${text}"$'\n'"reason: ${reason}"
   fi
 
   if have winpty && [[ -t 0 && -t 1 ]]; then
@@ -984,7 +984,7 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
   fi
   [[ -n "$TG_TO" ]] || die "telegram_to is required. Set it in telegram.conf or enter it interactively."
   if [[ -z "$TG_CAPTION" ]]; then
-    TG_CAPTION="Packed by **$(escape_md "$MACHINE_NAME")**"
+    TG_CAPTION="Packed by **$(escape_md "$MACHINE_NAME")**"$'\n'"project: $(escape_md "$PROJECT_NAME")"
   fi
 
   log_pack "Telegram send..."
