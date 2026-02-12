@@ -125,6 +125,14 @@ escape_md() {
   printf '%s' "$s"
 }
 
+escape_html() {
+  local s="$1"
+  s="${s//&/&amp;}"
+  s="${s//</&lt;}"
+  s="${s//>/&gt;}"
+  printf '%s' "$s"
+}
+
 trim_ws() {
   local s="$1"
   s="${s#"${s%%[![:space:]]*}"}"
@@ -534,6 +542,7 @@ send_to_telegram_personal() {
     --project-name "$PROJECT_NAME"
     --file "$file"
     --non-interactive
+    --parse-mode html
   )
   if [[ "$TG_ACK_REQUIRED" == "1" ]]; then
     cmd+=(--require-ack --ack-text "$TG_ACK_TEXT" --scan-limit "$TG_ACK_SCAN_LIMIT")
@@ -824,9 +833,9 @@ send_telegram_close() {
   script_path="$script_dir/tg_send.py"
   [[ -f "$script_path" ]] || die "Telegram sender script not found: $script_path"
 
-  local text="Closed by **$(escape_md "$MACHINE_NAME")**"
+  local text="Closed by <b>$(escape_html "$MACHINE_NAME")</b>"
   if [[ -n "$reason" ]]; then
-    text="${text}"$'\n'"reason: ${reason}"
+    text="${text}"$'\n'"reason: $(escape_html "$reason")"
   fi
 
   if have winpty && [[ -t 0 && -t 1 ]]; then
@@ -841,7 +850,7 @@ send_telegram_close() {
     --to "$TG_TO"
     --text "$text"
     --reply-to "$msg_id"
-    --parse-mode md
+    --parse-mode html
     --non-interactive
   )
   if [[ -n "$TG_PROXY" ]]; then
@@ -1209,7 +1218,7 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
   fi
   [[ -n "$TG_TO" ]] || die "telegram_to is required. Set it in telegram.conf or enter it interactively."
   if [[ -z "$TG_CAPTION" ]]; then
-    TG_CAPTION="Packed by **$(escape_md "$MACHINE_NAME")**"$'\n'"project: $PROJECT_NAME"$'\n'"content: $(escape_md "$content_desc")"
+    TG_CAPTION="Packed by <b>$(escape_html "$MACHINE_NAME")</b>"$'\n'"project: $(escape_html "$PROJECT_NAME")"$'\n'"content: $(escape_html "$content_desc")"
   fi
 
   log_pack "Telegram send..."

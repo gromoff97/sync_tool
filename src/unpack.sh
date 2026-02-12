@@ -141,6 +141,14 @@ escape_md() {
   printf '%s' "$s"
 }
 
+escape_html() {
+  local s="$1"
+  s="${s//&/&amp;}"
+  s="${s//</&lt;}"
+  s="${s//>/&gt;}"
+  printf '%s' "$s"
+}
+
 format_list() {
   local max=15
   local -a items=("$@")
@@ -165,6 +173,42 @@ format_list() {
     out+="...(+$((count - max)))"
   fi
   printf '%s' "$out"
+}
+
+format_list_lines() {
+  local max=15
+  local -a items=("$@")
+  local count="${#items[@]}"
+  if [[ "$count" -eq 0 ]]; then
+    printf '%s' ""
+    return 0
+  fi
+  local limit="$count"
+  if [[ "$count" -gt "$max" ]]; then
+    limit="$max"
+  fi
+  local out=""
+  local i
+  for ((i=0; i<limit; i++)); do
+    out+="- $(escape_html "${items[$i]}")"$'\n'
+  done
+  if [[ "$count" -gt "$max" ]]; then
+    out+="- ...(+$((count - max)))"$'\n'
+  fi
+  printf '%s' "$out"
+}
+
+append_list_section() {
+  local label="$1"; shift
+  local -a items=("$@")
+  [[ "${#items[@]}" -gt 0 ]] || return 0
+  details_lines+=("$(escape_html "$label"):")
+  local list
+  list="$(format_list_lines "${items[@]}")"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    details_lines+=("$line")
+  done <<< "$list"
 }
 
 strip_quotes() {
@@ -796,12 +840,9 @@ send_ack_message() {
     *) reason_text="${reason}" ;;
   esac
   local md_name
-  md_name="$(escape_md "$MACHINE_NAME")"
+  md_name="$(escape_html "$MACHINE_NAME")"
   local details="${ACK_DETAILS:-}"
-  if [[ -n "$details" ]]; then
-    details="$(escape_md "$details")"
-  fi
-  local text="${prefix} **${md_name}**"$'\n'"reason: ${reason_text}"
+  local text="${prefix} <b>${md_name}</b>"$'\n'"reason: $(escape_html "$reason_text")"
   if [[ -n "$details" ]]; then
     text="${text}"$'\n'"${details}"
   fi
@@ -827,7 +868,7 @@ send_ack_message() {
     --text "$text"
     --reply-to "$PULL_MSG_ID"
     --non-interactive
-    --parse-mode md
+    --parse-mode html
   )
   if [[ -n "$TG_PROXY" ]]; then
     cmd+=(--proxy "$TG_PROXY")
@@ -852,7 +893,7 @@ send_failure_log() {
   if [[ ${#reason} -gt 160 ]]; then
     reason="${reason:0:160}..."
   fi
-  local caption="Unpack failed on **$(escape_md "$MACHINE_NAME")**"$'\n'"reason: $(escape_md "$reason")"
+  local caption="Unpack failed on <b>$(escape_html "$MACHINE_NAME")</b>"$'\n'"reason: $(escape_html "$reason")"
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -876,6 +917,7 @@ send_failure_log() {
     --caption "$caption"
     --reply-to "$PULL_MSG_ID"
     --non-interactive
+    --parse-mode html
   )
   if [[ -n "$TG_PROXY" ]]; then
     cmd+=(--proxy "$TG_PROXY")
@@ -1350,15 +1392,9 @@ if [[ "$FF_ONLY" == "1" ]]; then
       esac
     done
     details_lines=()
-    if [[ "${#older_list[@]}" -gt 0 ]]; then
-      details_lines+=("old: ${older_list[*]}")
-    fi
-    if [[ "${#newer_list[@]}" -gt 0 ]]; then
-      details_lines+=("new: ${newer_list[*]}")
-    fi
-    if [[ "${#unknown_list[@]}" -gt 0 ]]; then
-      details_lines+=("unknown: ${unknown_list[*]}")
-    fi
+    append_list_section "old" "${older_list[@]}"
+    append_list_section "new" "${newer_list[@]}"
+    append_list_section "unknown" "${unknown_list[@]}"
     details=""
     if [[ "${#details_lines[@]}" -gt 0 ]]; then
       details="$(printf '%s\n' "${details_lines[@]}")"
@@ -1448,12 +1484,8 @@ for b in "${branches[@]}"; do
 done
 
 details_lines=()
-if [[ "${#updated_branches[@]}" -gt 0 ]]; then
-  details_lines+=("branches updated: $(format_list "${updated_branches[@]}")")
-fi
-if [[ "${#created_branches[@]}" -gt 0 ]]; then
-  details_lines+=("branches created: $(format_list "${created_branches[@]}")")
-fi
+append_list_section "branches updated" "${updated_branches[@]}"
+append_list_section "branches created" "${created_branches[@]}"
 if [[ "$PACK_TAGS_INCLUDED" == "1" && -f "$local_tags_before" && -f "$local_tags_after" ]]; then
   tag_changes="$(awk -F'\t' 'FNR==NR {m[$1]=$2; next} {if(!( $1 in m) || m[$1] != $2) c++} END{print c+0}' \
     "$local_tags_before" "$local_tags_after")"
@@ -1483,12 +1515,8 @@ if [[ "$PACK_HAS_REMOTE" == "1" && -f "$local_remote_before" && -f "$local_remot
       remote_updated+=("$name")
     fi
   done
-  if [[ "${#remote_updated[@]}" -gt 0 ]]; then
-    details_lines+=("remote updated: $(format_list "${remote_updated[@]}")")
-  fi
-  if [[ "${#remote_created[@]}" -gt 0 ]]; then
-    details_lines+=("remote created: $(format_list "${remote_created[@]}")")
-  fi
+  append_list_section "remote updated" "${remote_updated[@]}"
+  append_list_section "remote created" "${remote_created[@]}"
 fi
 
 if [[ -z "${ACK_NOTE:-}" || "$ACK_NOTE" == "UNPACKED" ]]; then

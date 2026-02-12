@@ -279,6 +279,7 @@ def send_file_with_timeout(
     file_path: str,
     caption: str,
     progress_callback: Callable[[int, int], None],
+    parse_mode: str,
     reply_to: int = 0,
 ) -> object:
     async def _upload() -> object:
@@ -286,7 +287,7 @@ def send_file_with_timeout(
             to_peer,
             file_path,
             caption=caption or None,
-            parse_mode="md",
+            parse_mode=parse_mode or "md",
             progress_callback=progress_callback,
             reply_to=reply_to or None,
         )
@@ -1111,6 +1112,7 @@ def main() -> int:
                 file_path=args.file,
                 caption=args.caption,
                 progress_callback=progress_cb,
+                parse_mode=args.parse_mode or "md",
                 reply_to=args.reply_to or 0,
             ),
             status_suffix=progress_suffix,
