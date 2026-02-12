@@ -50,6 +50,26 @@ detect_machine_name() {
   printf '%s' "$name"
 }
 
+to_posix_path() {
+  local p="$1"
+  if [[ -z "$p" ]]; then
+    printf '%s' "$p"
+    return 0
+  fi
+  if have cygpath; then
+    cygpath -u "$p"
+    return 0
+  fi
+  p="${p//\\//}"
+  if [[ "$p" =~ ^([A-Za-z]):/(.*)$ ]]; then
+    local drive="${BASH_REMATCH[1]}"
+    local rest="${BASH_REMATCH[2]}"
+    printf '/%s/%s' "${drive,,}" "$rest"
+    return 0
+  fi
+  printf '%s' "$p"
+}
+
 require_tools() {
   have git  || die "git not found"
   have tar  || die "tar not found"
@@ -427,6 +447,7 @@ download_pack_from_telegram() {
   [[ -f "$path_file" ]] || die "Telegram download completed but path file missing."
   PACK_FILE_OVERRIDE="$(tr -d '\r' < "$path_file")"
   [[ -n "$PACK_FILE_OVERRIDE" ]] || die "Telegram download completed but pack path is empty."
+  PACK_FILE_OVERRIDE="$(to_posix_path "$PACK_FILE_OVERRIDE")"
 }
 
 gitpath() { git -C "$1" rev-parse --git-path "$2"; }
@@ -609,6 +630,7 @@ EOF
 require_tools
 
 PACK_DIR="${HOME:+$HOME/syncpacks}"
+PACK_DIR_POSIX=""
 PACK_PREFIX="syncpack"
 PACK_FILE_OVERRIDE=""
 PULL_MSG_ID=""
@@ -684,9 +706,14 @@ TOOL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_FILE="$TOOL_DIR/conf/unpack.conf"
 load_config_overrides "$CONFIG_FILE"
 
+PACK_DIR_POSIX="$(to_posix_path "$PACK_DIR")"
+if [[ -n "$PACK_FILE_OVERRIDE" ]]; then
+  PACK_FILE_OVERRIDE="$(to_posix_path "$PACK_FILE_OVERRIDE")"
+fi
+
 [[ -n "$PEER" ]] || die "--peer cannot be empty"
 [[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
-[[ -n "$PACK_DIR" ]] || die "HOME is not set; use --pack-dir PATH."
+[[ -n "$PACK_DIR_POSIX" ]] || die "HOME is not set; use --pack-dir PATH."
 [[ "$FF_ONLY" == "0" || "$FF_ONLY" == "1" ]] || die "--ff-only must be 0|1"
 [[ "$FORCE_TAGS" == "0" || "$FORCE_TAGS" == "1" ]] || die "--force-tags must be 0|1"
 [[ "$PRUNE_REMOTE_REFS" == "0" || "$PRUNE_REMOTE_REFS" == "1" ]] || die "--prune-remote-refs must be 0|1"
@@ -841,7 +868,7 @@ if [[ "$PULL_MODE" == "1" ]]; then
 elif [[ -n "$PACK_FILE_OVERRIDE" ]]; then
   PACK_FILE="$PACK_FILE_OVERRIDE"
 else
-  PACK_FILE="$(pick_latest_pack "$PACK_DIR" "$PACK_PREFIX" "$PROJECT_NAME")"
+  PACK_FILE="$(pick_latest_pack "$PACK_DIR_POSIX" "$PACK_PREFIX" "$PROJECT_NAME")"
 fi
 [[ -f "$PACK_FILE" ]] || die "Pack file not found: $PACK_FILE"
 pack_project="$(project_from_pack_name "$PACK_PREFIX" "$PACK_FILE" || true)"
