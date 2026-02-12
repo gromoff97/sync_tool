@@ -544,6 +544,7 @@ Options:
   --machine-name NAME      default: auto-detected; written to manifest only
   --dry-run                show what would be done without creating/sending
   --mproto-login           interactive MTProto login + connection test, writes <tool_dir>/conf/telegram.conf
+  --list-chats             list Telegram chats (with peer_id/access_hash) using telegram.conf
   --help
 
 Subcommands:
@@ -591,6 +592,47 @@ EOF
   exit 2
 }
 
+list_telegram_chats() {
+  local config_file="$1"
+  local -a py_cmd cmd
+  select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
+  py_cmd=("${PY_CMD[@]}" "-u")
+  log_pack "Telegram python: $(python_exec_path_cmd "${PY_CMD[@]}")"
+
+  local script_dir script_path
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  script_path="$script_dir/tg_send.py"
+  [[ -f "$script_path" ]] || die "Telegram sender script not found: $script_path"
+
+  # Git Bash + Windows console Python can lose interactive prompts without winpty.
+  if have winpty && [[ -t 0 && -t 1 ]]; then
+    py_cmd=("winpty" "${py_cmd[@]}")
+  fi
+
+  cmd=("${py_cmd[@]}" "$script_path"
+    --api-id "$TG_API_ID"
+    --api-hash "$TG_API_HASH"
+    --session "$TG_SESSION"
+    --config-file "$config_file"
+    --list-chats
+    --non-interactive
+  )
+  if [[ -n "$TG_PROXY" ]]; then
+    cmd+=(--proxy "$TG_PROXY")
+  fi
+  if [[ -n "$TG_SESSION_STRING" ]]; then
+    cmd+=(--session-string "$TG_SESSION_STRING")
+  fi
+
+  if [[ -z "$C_RESET" ]]; then
+    NO_COLOR=1 "${cmd[@]}"
+  elif [[ "$USE_256_COLOR" == "1" ]]; then
+    FORCE_COLOR=1 FORCE_256_COLOR=1 "${cmd[@]}"
+  else
+    FORCE_COLOR=1 "${cmd[@]}"
+  fi
+}
+
 # ---- parse args ----
 require_tools
 
@@ -599,6 +641,7 @@ PACK_PREFIX="syncpack"
 MACHINE_NAME=""
 SEND_TO_TELEGRAM="0"
 MPROTO_LOGIN="0"
+LIST_CHATS="0"
 OTHER_OPTS_USED="0"
 TG_API_ID=""
 TG_API_HASH=""
@@ -637,6 +680,7 @@ while [[ $# -gt 0 ]]; do
     --machine-name=*)  MACHINE_NAME="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     --dry-run)         DRY_RUN="1"; shift 1;;
     --mproto-login)    MPROTO_LOGIN="1"; shift 1;;
+    --list-chats)      LIST_CHATS="1"; shift 1;;
     --help|-h)         usage_main;;
     *) die "Unknown option: $1 (use --help)";;
   esac
@@ -645,9 +689,12 @@ done
 if [[ "$MPROTO_LOGIN" == "1" && "$OTHER_OPTS_USED" == "1" ]]; then
   die "--mproto-login cannot be combined with other options."
 fi
+if [[ "$LIST_CHATS" == "1" && "$OTHER_OPTS_USED" == "1" ]]; then
+  die "--list-chats cannot be combined with other options."
+fi
 
 REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [[ -z "$REPO_DIR" && "$MPROTO_LOGIN" != "1" ]]; then
+if [[ -z "$REPO_DIR" && "$MPROTO_LOGIN" != "1" && "$LIST_CHATS" != "1" ]]; then
   die "Run pack.sh inside a git repository."
 fi
 
@@ -658,7 +705,7 @@ CONFIG_FILE="$TOOL_DIR/conf/pack.conf"
 load_config_overrides "$CONFIG_FILE"
 
 [[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
-if [[ "$MPROTO_LOGIN" != "1" ]]; then
+if [[ "$MPROTO_LOGIN" != "1" && "$LIST_CHATS" != "1" ]]; then
   [[ -n "$OUTPUT_DIR" ]] || die "HOME is not set; use --output-dir PATH."
 fi
 
@@ -674,6 +721,15 @@ if [[ "$MPROTO_LOGIN" == "1" ]]; then
   load_telegram_config "$TELEGRAM_CONFIG_FILE"
   log_pack "MTProto login..."
   send_mproto_login "$TELEGRAM_CONFIG_FILE"
+  exit $?
+fi
+
+if [[ "$LIST_CHATS" == "1" ]]; then
+  TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
+  load_telegram_config "$TELEGRAM_CONFIG_FILE"
+  require_telegram_config "$TELEGRAM_CONFIG_FILE"
+  log_pack "Telegram chats..."
+  list_telegram_chats "$TELEGRAM_CONFIG_FILE"
   exit $?
 fi
 

@@ -46,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--last-message-id", type=int, default=0)
     parser.add_argument("--mproto-login", action="store_true", help="Interactive MTProto login and connection test")
     parser.add_argument("--mtproto-test", dest="mproto_login", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--list-chats", action="store_true", help="List available chats with peer_id/access_hash")
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values")
     return parser.parse_args()
 
@@ -494,24 +495,29 @@ def main() -> int:
     NON_INTERACTIVE = bool(args.non_interactive)
 
     if not args.mproto_login:
-        if args.pull_latest and (args.file or args.text):
-            err("file/text cannot be used with --pull-latest")
-            return 1
-        if args.text and args.file:
-            err("use either --text or --file, not both")
-            return 1
-        if not args.file and not args.text:
-            if not args.pull_latest:
-                err("file or text is required unless --mproto-login or --pull-latest is set")
-                return 1
-        if args.pull_latest:
-            if not args.pack_dir or not args.pack_prefix or not args.project_name:
-                err("--pull-latest requires --pack-dir, --pack-prefix, and --project-name")
+        if args.list_chats:
+            if args.pull_latest or args.file or args.text:
+                err("list-chats cannot be combined with file/text/pull-latest")
                 return 1
         else:
-            if args.file and not os.path.isfile(args.file):
-                err(f"file not found: {args.file}")
+            if args.pull_latest and (args.file or args.text):
+                err("file/text cannot be used with --pull-latest")
                 return 1
+            if args.text and args.file:
+                err("use either --text or --file, not both")
+                return 1
+            if not args.file and not args.text:
+                if not args.pull_latest:
+                    err("file or text is required unless --mproto-login or --pull-latest is set")
+                    return 1
+            if args.pull_latest:
+                if not args.pack_dir or not args.pack_prefix or not args.project_name:
+                    err("--pull-latest requires --pack-dir, --pack-prefix, and --project-name")
+                    return 1
+            else:
+                if args.file and not os.path.isfile(args.file):
+                    err(f"file not found: {args.file}")
+                    return 1
 
     try:
         from colorama import just_fix_windows_console
@@ -791,6 +797,29 @@ def main() -> int:
             if not proxy_raw:
                 remove_keys.add("telegram_proxy")
             update_conf_file(args.config_file, updates=updates, remove_keys=remove_keys)
+            return 0
+
+        if args.list_chats:
+            run_wait_step("Connect Telegram", client.connect)
+            ensure_authorized()
+            py(f"Authorized: {client.is_user_authorized()}")
+            from telethon.utils import get_peer_id
+            py("Chats (groups/channels):")
+            for d in client.iter_dialogs():
+                if not (d.is_group or d.is_channel):
+                    continue
+                ent = d.entity
+                peer_id = get_peer_id(ent)
+                access_hash = getattr(ent, "access_hash", None)
+                username = getattr(ent, "username", None)
+                kind = "group"
+                if getattr(ent, "broadcast", False):
+                    kind = "channel"
+                elif getattr(ent, "megagroup", False):
+                    kind = "supergroup"
+                py(
+                    f"{d.name} | {kind} | peer_id={peer_id} | access_hash={access_hash} | username={username or ''}"
+                )
             return 0
 
         if args.pull_latest:
