@@ -211,6 +211,7 @@ load_telegram_config() {
   TG_ACK_SCAN_LIMIT="32"
   TG_CAPTION=""
   TG_PYTHON_MIN="3.8"
+  TG_TRANSFER_TIMEOUT="20"
 
   [[ -f "$cfg" ]] || return 0
 
@@ -239,6 +240,7 @@ load_telegram_config() {
       telegram_ack_scan_limit|TELEGRAM_ACK_SCAN_LIMIT|ack_scan_limit|ACK_SCAN_LIMIT) TG_ACK_SCAN_LIMIT="$value" ;;
       telegram_caption|TELEGRAM_CAPTION|caption|CAPTION) TG_CAPTION="$value" ;;
       telegram_python_min|TELEGRAM_PYTHON_MIN|python_min|PYTHON_MIN) TG_PYTHON_MIN="$value" ;;
+      telegram_transfer_timeout|TELEGRAM_TRANSFER_TIMEOUT|transfer_timeout|TRANSFER_TIMEOUT) TG_TRANSFER_TIMEOUT="$value" ;;
       *) ;;
     esac
   done < "$cfg"
@@ -249,6 +251,7 @@ load_telegram_config() {
   [[ -z "$TG_API_ID" || "$TG_API_ID" =~ ^[0-9]+$ ]] || die "telegram_api_id must be an integer in $cfg"
   [[ "$TG_PYTHON_MIN" =~ ^[0-9]+\.[0-9]+$ ]] || die "telegram_python_min must be MAJOR.MINOR in $cfg"
   [[ "$TG_ACK_SCAN_LIMIT" =~ ^[0-9]+$ ]] || die "telegram_ack_scan_limit must be an integer in $cfg"
+  [[ "$TG_TRANSFER_TIMEOUT" =~ ^[0-9]+$ ]] || die "telegram_transfer_timeout must be an integer (seconds) in $cfg"
 }
 
 require_telegram_config() {
@@ -416,6 +419,9 @@ send_to_telegram_personal() {
     --file "$file"
     --non-interactive
   )
+  if [[ -n "$TG_TRANSFER_TIMEOUT" ]]; then
+    cmd+=(--timeout "$TG_TRANSFER_TIMEOUT")
+  fi
   if [[ "$TG_ACK_REQUIRED" == "1" ]]; then
     cmd+=(--require-ack --ack-text "$TG_ACK_TEXT" --scan-limit "$TG_ACK_SCAN_LIMIT")
   fi
@@ -582,6 +588,7 @@ Config:
     telegram_proxy (optional, e.g. socks5://user:pass@host:1080)
     telegram_ack_scan_limit (default: 32)
     telegram_caption, telegram_python_min
+    telegram_transfer_timeout (seconds, default: 20)
   Default caption: Packed by **machine_name**
   Python modules for push: telethon, colorama
 

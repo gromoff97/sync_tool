@@ -48,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mtproto-test", dest="mproto_login", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--list-chats", action="store_true", help="List available chats with peer_id/access_hash")
     parser.add_argument("--chat-filter", default="", help="Filter for list-chats (substring match)")
+    parser.add_argument("--timeout", type=int, default=20, help="Transfer timeout in seconds")
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values")
     return parser.parse_args()
 
@@ -492,8 +493,9 @@ def resolve_required(name: str, raw_value: str, prompt: str, secret: bool = Fals
 
 def main() -> int:
     args = parse_args()
-    global NON_INTERACTIVE
+    global NON_INTERACTIVE, UPLOAD_TIMEOUT_SECONDS
     NON_INTERACTIVE = bool(args.non_interactive)
+    UPLOAD_TIMEOUT_SECONDS = max(1, int(args.timeout or 20))
 
     if not args.mproto_login:
         if args.list_chats:
