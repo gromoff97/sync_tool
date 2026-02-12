@@ -761,7 +761,7 @@ send_ack_message() {
     NO_CHANGES) reason_text="no changes" ;;
     DIVERGED) reason_text="diverged" ;;
     FAILED) reason_text="failed" ;;
-    UNPACKED) reason_text="unpacked" ;;
+    UNPACKED) reason_text="updated" ;;
     *) reason_text="${reason}" ;;
   esac
   local md_name
@@ -1074,6 +1074,7 @@ git -C "$REPO_DIR" for-each-ref --format="%(refname:strip=3)${tab}%(objectname)"
   | tr -d '\r' > "$old_remote" || true
 
 fetch_err="$tmp/fetch_err.txt"
+info "Fetch bundle into refs/remotes/$PEER/*"
 # Always force-update peer namespace from bundle. Local branch safety is handled separately by --ff-only.
 if ! git -C "$REPO_DIR" fetch --force "$bundle" "refs/heads/*:refs/remotes/$PEER/*" >/dev/null 2>"$fetch_err"; then
   cat "$fetch_err" >&2
@@ -1081,8 +1082,10 @@ if ! git -C "$REPO_DIR" fetch --force "$bundle" "refs/heads/*:refs/remotes/$PEER
 fi
 
 if [[ "$FORCE_TAGS" == "1" ]]; then
+  info "Update tags (force)"
   git -C "$REPO_DIR" fetch --force "$bundle" "refs/tags/*:refs/tags/*" >/dev/null 2>/dev/null || true
 else
+  info "Update tags"
   git -C "$REPO_DIR" fetch "$bundle" "refs/tags/*:refs/tags/*" >/dev/null 2>/dev/null || true
 fi
 
@@ -1132,6 +1135,7 @@ current_branch="$(git -C "$REPO_DIR" symbolic-ref --short -q HEAD 2>/dev/null ||
 forced_updates=0
 
 if [[ "$FF_ONLY" == "1" ]]; then
+  info "Check fast-forward safety"
   diverged=()
   diverged_status=()
   for b in "${branches[@]}"; do
@@ -1194,6 +1198,7 @@ if [[ "$FF_ONLY" == "1" ]]; then
   fi
 fi
 
+info "Update local branches from $PEER/*"
 for b in "${branches[@]}"; do
   remote_sha="$(git -C "$REPO_DIR" rev-parse "refs/remotes/$PEER/$b")"
   if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
