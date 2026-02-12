@@ -666,7 +666,9 @@ def main() -> int:
         api_id = int(api_id_raw)
 
         api_hash = resolve_required("telegram_api_hash", args.api_hash, "Enter telegram_api_hash: ")
-        if args.mproto_login:
+        if args.list_chats:
+            to_peer = (args.to or "").strip()
+        elif args.mproto_login:
             to_peer = (args.to or "").strip()
         elif args.pull_latest:
             from_peer = (args.from_peer or "").strip()
