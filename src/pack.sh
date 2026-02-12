@@ -388,7 +388,7 @@ select_python_for_telegram() {
 }
 
 send_to_telegram_personal() {
-  local file="$1" caption="$2" config_file="$3"
+  local file="$1" caption="$2" config_file="$3" interactive="$4"
   local -a py_cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -414,8 +414,10 @@ send_to_telegram_personal() {
     --pack-prefix "$PACK_PREFIX"
     --project-name "$PROJECT_NAME"
     --file "$file"
-    --non-interactive
   )
+  if [[ "$interactive" != "1" ]]; then
+    cmd+=(--non-interactive)
+  fi
   if [[ "$TG_ACK_REQUIRED" == "1" ]]; then
     cmd+=(--require-ack --ack-text "$TG_ACK_TEXT" --scan-limit "$TG_ACK_SCAN_LIMIT")
   fi
@@ -571,8 +573,9 @@ Options (same as pack):
   --help
 
 Config:
-  <tool_dir>/conf/telegram.conf is required for push.
-  push is non-interactive for Telegram auth; run --mproto-login to create/refresh telegram.conf.
+  <tool_dir>/conf/telegram.conf is used for push.
+  If missing or incomplete, push will prompt for required Telegram settings and save them.
+  Run --mproto-login to pre-create/refresh telegram.conf.
   If telegram_to is missing, push will prompt for it and save for next time.
   Supported keys:
     telegram_api_id, telegram_api_hash, telegram_to
@@ -775,8 +778,18 @@ mv -f "$tmp_out" "$final_path" || die "Cannot move archive to output dir"
 
 if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
   TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
-  load_telegram_config "$TELEGRAM_CONFIG_FILE"
-  require_telegram_config "$TELEGRAM_CONFIG_FILE"
+  TG_INTERACTIVE="0"
+  if [[ -f "$TELEGRAM_CONFIG_FILE" ]]; then
+    load_telegram_config "$TELEGRAM_CONFIG_FILE"
+    if [[ -z "$TG_API_ID" || -z "$TG_API_HASH" ]] || looks_like_placeholder "$TG_API_ID" || looks_like_placeholder "$TG_API_HASH"; then
+      TG_INTERACTIVE="1"
+    fi
+  else
+    TG_INTERACTIVE="1"
+  fi
+  if [[ "$TG_INTERACTIVE" != "1" ]]; then
+    require_telegram_config "$TELEGRAM_CONFIG_FILE"
+  fi
   if looks_like_placeholder "$TG_TO"; then
     TG_TO=""
   fi
@@ -793,7 +806,7 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
 
   log_pack "Telegram send..."
   DELETE_FINAL_ON_EXIT="1"
-  send_to_telegram_personal "$final_path" "$TG_CAPTION" "$TELEGRAM_CONFIG_FILE"
+  send_to_telegram_personal "$final_path" "$TG_CAPTION" "$TELEGRAM_CONFIG_FILE" "$TG_INTERACTIVE"
   rm -f -- "$final_path" || die "Uploaded to Telegram, but failed to delete local pack: $final_path"
   DELETE_FINAL_ON_EXIT="0"
   log_ok "Removed: $final_path"

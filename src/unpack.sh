@@ -592,7 +592,8 @@ Options (same as unpack):
   --help
 
 Config:
-  <tool_dir>/conf/telegram.conf is required for pull.
+  <tool_dir>/conf/telegram.conf is used for pull.
+  If missing or incomplete, pull will prompt for required Telegram settings and save them.
   Supported keys: telegram_api_id, telegram_api_hash, telegram_from (optional),
                   telegram_session/session_string, telegram_proxy, telegram_python_min
 
@@ -809,8 +810,18 @@ fi
 if [[ "$PULL_MODE" == "1" ]]; then
   [[ -n "$PROJECT_NAME" ]] || die "Project name required for pull. Use --project-name or run inside repo."
   TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
-  load_telegram_config "$TELEGRAM_CONFIG_FILE"
-  require_telegram_config "$TELEGRAM_CONFIG_FILE"
+  TG_INTERACTIVE="0"
+  if [[ -f "$TELEGRAM_CONFIG_FILE" ]]; then
+    load_telegram_config "$TELEGRAM_CONFIG_FILE"
+    if [[ -z "$TG_API_ID" || -z "$TG_API_HASH" ]] || looks_like_placeholder "$TG_API_ID" || looks_like_placeholder "$TG_API_HASH"; then
+      TG_INTERACTIVE="1"
+    fi
+  else
+    TG_INTERACTIVE="1"
+  fi
+  if [[ "$TG_INTERACTIVE" != "1" ]]; then
+    require_telegram_config "$TELEGRAM_CONFIG_FILE"
+  fi
   MACHINE_NAME="$(detect_machine_name)"
   if [[ "$DRY_RUN" == "1" ]]; then
     info "Dry-run: would pull latest pack from Telegram for project '$PROJECT_NAME'."
