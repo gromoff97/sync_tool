@@ -33,7 +33,12 @@ else
   C_ERR=''
 fi
 
-die() { printf '%b[ERR]%b %s\n' "$C_ERR" "$C_RESET" "$*" >&2; exit 1; }
+LAST_ERROR=""
+die() {
+  LAST_ERROR="$*"
+  printf '%b[ERR]%b %s\n' "$C_ERR" "$C_RESET" "$*" >&2
+  exit 1
+}
 warn() { printf '%b[WRN]%b %s\n' "$C_WRN" "$C_RESET" "$*" >&2; }
 info() { printf '%b[APP]%b %s\n' "$C_APP" "$C_RESET" "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -838,7 +843,16 @@ send_failure_log() {
   [[ "$PULL_MODE" == "1" ]] || return 0
   [[ -n "$TG_FROM" && -n "$PULL_MSG_ID" ]] || return 0
   [[ -f "$LOG_FILE" ]] || return 0
-  local caption="Unpack failed on **$(escape_md "$MACHINE_NAME")**"$'\n'"reason: failed"
+  local reason="${LAST_ERROR:-failed}"
+  reason="${reason//$'\r'/}"
+  reason="${reason//$'\n'/ }"
+  if [[ -z "$reason" ]]; then
+    reason="failed"
+  fi
+  if [[ ${#reason} -gt 160 ]]; then
+    reason="${reason:0:160}..."
+  fi
+  local caption="Unpack failed on **$(escape_md "$MACHINE_NAME")**"$'\n'"reason: $(escape_md "$reason")"
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -895,6 +909,18 @@ cleanup() {
   rm -rf "$tmp" 2>/dev/null || true
 }
 trap cleanup EXIT
+on_err() {
+  local cmd="$BASH_COMMAND"
+  cmd="${cmd//$'\r'/}"
+  cmd="${cmd//$'\n'/ }"
+  if [[ -z "${LAST_ERROR:-}" ]]; then
+    if [[ ${#cmd} -gt 160 ]]; then
+      cmd="${cmd:0:160}..."
+    fi
+    LAST_ERROR="command failed: $cmd"
+  fi
+}
+trap on_err ERR
 
 if [[ "$PULL_MODE" == "1" && -n "$LOG_FILE" ]] && have tee; then
   exec > >(tee -a "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2)
