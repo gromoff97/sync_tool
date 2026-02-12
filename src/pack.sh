@@ -362,9 +362,11 @@ fetch_recent_remote_branches() {
   )
 
   if [[ "${#recent_branches[@]}" -eq 0 ]]; then
-    die "No remote branches updated in the last ${days} days."
+    log_git "No remote branches updated in the last ${days} days."
+    return 0
   fi
 
+  log_git "Update recent branches: ${#recent_branches[@]}"
   for b in "${recent_branches[@]}"; do
     if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
       if git -C "$REPO_DIR" merge-base --is-ancestor "$b" "$remote/$b"; then
@@ -380,7 +382,6 @@ fetch_recent_remote_branches() {
       git -C "$REPO_DIR" branch "$b" "$remote/$b" >/dev/null 2>&1 || true
     fi
   done
-  BRANCHES_RAW="$(IFS=','; printf '%s' "${recent_branches[*]}")"
 }
 
 select_default_remote() {
@@ -643,7 +644,7 @@ Options:
   --output-dir PATH        default: ~/syncpacks
   --pack-prefix PREFIX     default: syncpack
   --machine-name NAME      default: auto-detected; written to manifest only
-  -u, --update-remote      fetch recent branches from remote before pack
+  -u, --update-remote      fetch recent branches from remote before pack (pack all branches)
   --remote NAME            remote name (default: origin; required with -u)
   --recent-days N          how many days back is "recent" (default: 180)
   --branch NAME            pack only this branch (no tags by default)
@@ -675,7 +676,7 @@ Options (same as pack):
   --output-dir PATH        default: ~/syncpacks
   --pack-prefix PREFIX     default: syncpack
   --machine-name NAME      default: auto-detected; written to manifest only
-  -u, --update-remote      fetch recent branches from remote before pack
+  -u, --update-remote      fetch recent branches from remote before pack (pack all branches)
   --remote NAME            remote name (default: origin; required with -u)
   --recent-days N          how many days back is "recent" (default: 180)
   --branch NAME            pack only this branch (no tags by default)
