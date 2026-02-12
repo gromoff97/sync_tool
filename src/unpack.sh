@@ -1127,20 +1127,28 @@ if [[ "$PRUNE_REMOTE_REFS" == "1" ]]; then
   [[ "$removed_remote" -gt 0 ]] && info "Remote refs pruned: $removed_remote"
 fi
 
+info "Collect remote branches list"
 mapfile -t branches < <(git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=3)' "refs/remotes/$PEER/" | tr -d '\r' | sort)
 if [[ "${#branches[@]}" -eq 0 ]]; then
   warn "No branches after fetch. Done."
   exit 0
 fi
+info "Remote branches: ${#branches[@]}"
 
 current_branch="$(git -C "$REPO_DIR" symbolic-ref --short -q HEAD 2>/dev/null || true)"
 forced_updates=0
 
 if [[ "$FF_ONLY" == "1" ]]; then
   info "Check fast-forward safety"
+  check_start=$SECONDS
+  checked=0
   diverged=()
   diverged_status=()
   for b in "${branches[@]}"; do
+    checked=$((checked + 1))
+    if (( checked % 200 == 0 )); then
+      info "Checked $checked/${#branches[@]} branches..."
+    fi
     if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
       if ! git -C "$REPO_DIR" merge-base --is-ancestor "$b" "$PEER/$b"; then
         diverged+=("$b")
@@ -1154,6 +1162,7 @@ if [[ "$FF_ONLY" == "1" ]]; then
       fi
     fi
   done
+  info "Fast-forward check done in $((SECONDS - check_start))s"
   if [[ "${#diverged[@]}" -gt 0 ]]; then
     warn "DIVERGED branches (fast-forward impossible):"
     for i in "${!diverged[@]}"; do
@@ -1201,7 +1210,13 @@ if [[ "$FF_ONLY" == "1" ]]; then
 fi
 
 info "Update local branches from $PEER/*"
+update_start=$SECONDS
+updated=0
 for b in "${branches[@]}"; do
+  updated=$((updated + 1))
+  if (( updated % 200 == 0 )); then
+    info "Updated $updated/${#branches[@]} branches..."
+  fi
   remote_sha="$(git -C "$REPO_DIR" rev-parse "refs/remotes/$PEER/$b")"
   if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
     if [[ -n "${current_branch:-}" && "$b" == "$current_branch" ]]; then
@@ -1223,12 +1238,16 @@ for b in "${branches[@]}"; do
     git -C "$REPO_DIR" branch "$b" "$remote_sha" >/dev/null
   fi
 done
+info "Branch update done in $((SECONDS - update_start))s"
 
 if [[ "$FF_ONLY" == "0" && "$forced_updates" -gt 0 ]]; then
   warn "FORCED updates may discard local commits."
 fi
 
 if [[ "$PRUNE_LOCAL_BRANCHES" == "1" && -s "$old_remote" ]]; then
+  info "Prune local branches"
+  prune_start=$SECONDS
+  pruned=0
   while IFS=$'\t' read -r b old_sha; do
     [[ -n "$b" && -n "$old_sha" ]] || continue
     if grep -Fxq "$b" "$incoming_list"; then
@@ -1241,6 +1260,7 @@ if [[ "$PRUNE_LOCAL_BRANCHES" == "1" && -s "$old_remote" ]]; then
       local_sha="$(git -C "$REPO_DIR" rev-parse "refs/heads/$b")"
       if [[ "$local_sha" == "$old_sha" ]]; then
         if git -C "$REPO_DIR" branch -D "$b" >/dev/null; then
+          pruned=$((pruned + 1))
           info "Deleted local branch: $b"
         else
           warn "Failed to delete local branch: $b"
@@ -1248,6 +1268,7 @@ if [[ "$PRUNE_LOCAL_BRANCHES" == "1" && -s "$old_remote" ]]; then
       fi
     fi
   done < "$old_remote"
+  info "Prune done: $pruned branches in $((SECONDS - prune_start))s"
 fi
 
 if [[ "$MODE" == "bootstrap" ]]; then
