@@ -984,6 +984,8 @@ fi
 
 pack_content_branches="$(read_manifest_value "$manifest" content_branches || true)"
 pack_content_tags="$(read_manifest_value "$manifest" content_tags || true)"
+pack_content_remote_name="$(read_manifest_value "$manifest" content_remote_name || true)"
+pack_content_remote_branches="$(read_manifest_value "$manifest" content_remote_branches || true)"
 if [[ -z "$pack_content_branches" ]]; then
   pack_content_branches="all"
 fi
@@ -994,6 +996,18 @@ PACK_TAGS_INCLUDED="$pack_content_tags"
 PACK_HAS_ALL_BRANCHES="1"
 if [[ "$pack_content_branches" != "all" ]]; then
   PACK_HAS_ALL_BRANCHES="0"
+fi
+PACK_HAS_REMOTE="0"
+PACK_REMOTE_NAME=""
+PACK_REMOTE_BRANCHES=()
+PACK_REMOTE_COUNT="0"
+if [[ -n "$pack_content_remote_name" && -n "$pack_content_remote_branches" ]]; then
+  PACK_REMOTE_NAME="$pack_content_remote_name"
+  IFS=',' read -r -a PACK_REMOTE_BRANCHES <<< "$pack_content_remote_branches"
+  PACK_REMOTE_COUNT="${#PACK_REMOTE_BRANCHES[@]}"
+  if [[ "$PACK_REMOTE_COUNT" -gt 0 ]]; then
+    PACK_HAS_REMOTE="1"
+  fi
 fi
 
 content_desc="branches"
@@ -1008,6 +1022,9 @@ if [[ "$PACK_TAGS_INCLUDED" == "1" ]]; then
   content_desc="${content_desc} + tags"
 else
   content_desc="${content_desc} (no tags)"
+fi
+if [[ "$PACK_HAS_REMOTE" == "1" ]]; then
+  content_desc="${content_desc} + remote refs ${PACK_REMOTE_NAME} (${PACK_REMOTE_COUNT})"
 fi
 info "Content: $content_desc"
 
@@ -1069,6 +1086,8 @@ if [[ "$MODE" == "existing" ]]; then
   incoming_tags_list="$tmp/incoming_tags.txt"
   local_heads_list="$tmp/local_heads.txt"
   local_tags_list="$tmp/local_tags.txt"
+  incoming_remote="$tmp/incoming_remote.tsv"
+  local_remote="$tmp/local_remote.tsv"
 
   awk '$2 ~ /^refs\/heads\// {sub("^refs/heads/","",$2); print $2 "\t" $1}' "$incoming_refs" | sort -u > "$incoming_heads"
   awk '$2 ~ /^refs\/tags\// {sub("^refs/tags/","",$2); print $2 "\t" $1}' "$incoming_refs" | sort -u > "$incoming_tags"
@@ -1078,6 +1097,13 @@ if [[ "$MODE" == "existing" ]]; then
   git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2) %(objectname)' refs/tags | tr -d '\r' \
     | awk '{print $1 "\t" $2}' | sort -u > "$local_tags"
 
+  if [[ "$PACK_HAS_REMOTE" == "1" ]]; then
+    awk -v r="refs/remotes/$PACK_REMOTE_NAME/" '$2 ~ "^" r {sub("^" r, "", $2); print $2 "\t" $1}' \
+      "$incoming_refs" | sort -u > "$incoming_remote"
+    git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=4) %(objectname)' "refs/remotes/$PEER/$PACK_REMOTE_NAME" \
+      | tr -d '\r' | awk '{print $1 "\t" $2}' | sort -u > "$local_remote"
+  fi
+
   identical="1"
   if [[ "$PACK_HAS_ALL_BRANCHES" == "1" ]]; then
     if ! cmp -s "$incoming_heads" "$local_heads"; then
@@ -1085,6 +1111,8 @@ if [[ "$MODE" == "existing" ]]; then
     elif [[ "$PACK_TAGS_INCLUDED" == "1" && ! -s "$incoming_tags" ]]; then
       :
     elif [[ "$PACK_TAGS_INCLUDED" == "1" && ! cmp -s "$incoming_tags" "$local_tags" ]]; then
+      identical="0"
+    elif [[ "$PACK_HAS_REMOTE" == "1" && ! cmp -s "$incoming_remote" "$local_remote" ]]; then
       identical="0"
     fi
 
@@ -1098,6 +1126,14 @@ if [[ "$MODE" == "existing" ]]; then
         identical="0"
       elif [[ "$PACK_TAGS_INCLUDED" == "1" && ! cmp -s "$incoming_tags_list" "$local_tags_list" ]]; then
         identical="0"
+      elif [[ "$PACK_HAS_REMOTE" == "1" ]]; then
+        incoming_remote_list="$tmp/incoming_remote_list.txt"
+        local_remote_list="$tmp/local_remote_list.txt"
+        awk -F'\t' '{print $1}' "$incoming_remote" > "$incoming_remote_list"
+        awk -F'\t' '{print $1}' "$local_remote" > "$local_remote_list"
+        if ! cmp -s "$incoming_remote_list" "$local_remote_list"; then
+          identical="0"
+        fi
       fi
     fi
   else
@@ -1108,6 +1144,12 @@ if [[ "$MODE" == "existing" ]]; then
     elif [[ "$PACK_TAGS_INCLUDED" == "1" ]]; then
       if ! awk -F'\t' 'FNR==NR {m[$1]=$2; next} {if(!( $1 in m) || m[$1] != $2) {exit 1}}' \
         "$local_tags" "$incoming_tags"; then
+        identical="0"
+      fi
+    fi
+    if [[ "$PACK_HAS_REMOTE" == "1" ]]; then
+      if ! awk -F'\t' 'FNR==NR {m[$1]=$2; next} {if(!( $1 in m) || m[$1] != $2) {exit 1}}' \
+        "$local_remote" "$incoming_remote"; then
         identical="0"
       fi
     fi
@@ -1143,6 +1185,14 @@ info "Fetch bundle into refs/remotes/$PEER/*"
 if ! git -C "$REPO_DIR" fetch --force "$bundle" "refs/heads/*:refs/remotes/$PEER/*" >/dev/null 2>"$fetch_err"; then
   cat "$fetch_err" >&2
   die "Fetch failed."
+fi
+
+if [[ "$PACK_HAS_REMOTE" == "1" ]]; then
+  info "Fetch remote refs from pack: $PACK_REMOTE_NAME"
+  if ! git -C "$REPO_DIR" fetch --force "$bundle" \
+    "refs/remotes/$PACK_REMOTE_NAME/*:refs/remotes/$PEER/$PACK_REMOTE_NAME/*" >/dev/null 2>/dev/null; then
+    die "Failed to fetch remote refs from pack."
+  fi
 fi
 
 bundle_tag_count="$(grep -E '^[0-9a-f]+[[:space:]]+refs/tags/' "$incoming_refs" 2>/dev/null | wc -l | awk '{print $1}' || true)"
@@ -1218,11 +1268,16 @@ info "Remote branches: ${#branches[@]}"
 
 local_heads_before="$tmp/local_heads_before.tsv"
 local_tags_before="$tmp/local_tags_before.tsv"
+local_remote_before="$tmp/local_remote_before.tsv"
 git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2) %(objectname)' refs/heads | tr -d '\r' \
   | awk '{print $1 "\t" $2}' > "$local_heads_before"
 if [[ "$PACK_TAGS_INCLUDED" == "1" ]]; then
   git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2) %(objectname)' refs/tags | tr -d '\r' \
     | awk '{print $1 "\t" $2}' > "$local_tags_before"
+fi
+if [[ "$PACK_HAS_REMOTE" == "1" ]]; then
+  git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=4) %(objectname)' "refs/remotes/$PEER/$PACK_REMOTE_NAME" \
+    | tr -d '\r' | awk '{print $1 "\t" $2}' > "$local_remote_before"
 fi
 
 current_branch="$(git -C "$REPO_DIR" symbolic-ref --short -q HEAD 2>/dev/null || true)"
@@ -1332,11 +1387,16 @@ info "Branch update done in $((SECONDS - update_start))s"
 
 local_heads_after="$tmp/local_heads_after.tsv"
 local_tags_after="$tmp/local_tags_after.tsv"
+local_remote_after="$tmp/local_remote_after.tsv"
 git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2) %(objectname)' refs/heads | tr -d '\r' \
   | awk '{print $1 "\t" $2}' > "$local_heads_after"
 if [[ "$PACK_TAGS_INCLUDED" == "1" ]]; then
   git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2) %(objectname)' refs/tags | tr -d '\r' \
     | awk '{print $1 "\t" $2}' > "$local_tags_after"
+fi
+if [[ "$PACK_HAS_REMOTE" == "1" ]]; then
+  git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=4) %(objectname)' "refs/remotes/$PEER/$PACK_REMOTE_NAME" \
+    | tr -d '\r' | awk '{print $1 "\t" $2}' > "$local_remote_after"
 fi
 
 declare -A before_map after_map
@@ -1373,6 +1433,35 @@ if [[ "$PACK_TAGS_INCLUDED" == "1" && -f "$local_tags_before" && -f "$local_tags
     "$local_tags_before" "$local_tags_after")"
   if [[ "${tag_changes:-0}" -gt 0 ]]; then
     details_lines+=("tags updated: $tag_changes")
+  fi
+fi
+
+if [[ "$PACK_HAS_REMOTE" == "1" && -f "$local_remote_before" && -f "$local_remote_after" ]]; then
+  declare -A r_before r_after
+  while IFS=$'\t' read -r name sha; do
+    [[ -n "$name" ]] || continue
+    r_before["$name"]="$sha"
+  done < "$local_remote_before"
+  while IFS=$'\t' read -r name sha; do
+    [[ -n "$name" ]] || continue
+    r_after["$name"]="$sha"
+  done < "$local_remote_after"
+  remote_updated=()
+  remote_created=()
+  for name in "${!r_after[@]}"; do
+    old_sha="${r_before[$name]-}"
+    new_sha="${r_after[$name]}"
+    if [[ -z "$old_sha" ]]; then
+      remote_created+=("$name")
+    elif [[ "$old_sha" != "$new_sha" ]]; then
+      remote_updated+=("$name")
+    fi
+  done
+  if [[ "${#remote_updated[@]}" -gt 0 ]]; then
+    details_lines+=("remote updated: $(format_list "${remote_updated[@]}")")
+  fi
+  if [[ "${#remote_created[@]}" -gt 0 ]]; then
+    details_lines+=("remote created: $(format_list "${remote_created[@]}")")
   fi
 fi
 

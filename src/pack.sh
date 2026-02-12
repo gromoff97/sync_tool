@@ -370,23 +370,7 @@ fetch_recent_remote_branches() {
 
   REMOTE_RECENT_BRANCHES=("${recent_branches[@]}")
   REMOTE_RECENT_COUNT="${#recent_branches[@]}"
-  log_git "Remote branches updated recently: $REMOTE_RECENT_COUNT"
-
-  for b in "${recent_branches[@]}"; do
-    if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
-      if git -C "$REPO_DIR" merge-base --is-ancestor "$b" "$remote/$b"; then
-        if [[ "$(git -C "$REPO_DIR" symbolic-ref --short -q HEAD 2>/dev/null || true)" == "$b" ]]; then
-          git -C "$REPO_DIR" merge --ff-only "$remote/$b" >/dev/null || die "Cannot fast-forward branch '$b' from '$remote'."
-        else
-          git -C "$REPO_DIR" update-ref "refs/heads/$b" "$remote/$b" >/dev/null
-        fi
-      else
-        die "Local branch '$b' diverged from '$remote/$b'. Resolve before pack -u."
-      fi
-    else
-      git -C "$REPO_DIR" branch "$b" "$remote/$b" >/dev/null 2>&1 || true
-    fi
-  done
+  log_git "Remote branches updated recently: $REMOTE_RECENT_COUNT (not applying to local heads)"
 }
 
 select_default_remote() {
@@ -1084,7 +1068,7 @@ if [[ "$WITH_TAGS" == "1" ]]; then
   content_desc="${content_desc} + tags"
 fi
 if [[ "$UPDATE_REMOTE" == "1" && "${REMOTE_RECENT_COUNT:-0}" -gt 0 ]]; then
-  content_desc="${content_desc} + remotes ${REMOTE_NAME} (${REMOTE_RECENT_COUNT})"
+  content_desc="${content_desc} + remote refs ${REMOTE_NAME} (${REMOTE_RECENT_COUNT})"
 fi
 log_pack "Content: $content_desc"
 
