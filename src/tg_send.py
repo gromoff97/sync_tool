@@ -240,13 +240,15 @@ def run_wait_step(step_label: str, action: Callable[[], T], status_suffix: Optio
 
 
 def make_upload_progress_logger(
-    initial_total_bytes: int = 0, phase_label: str = "transfer"
+    initial_total_bytes: int = 0,
+    phase_label: str = "transfer",
+    show_initial: bool = False,
 ) -> Tuple[Callable[[int, int], None], Callable[[], str]]:
     lock = threading.Lock()
     sent_bytes = 0
     total_bytes = max(0, int(initial_total_bytes or 0))
     progress_percent = 0
-    started = False
+    started = bool(show_initial and total_bytes > 0)
 
     def cb(sent: int, total: int) -> None:
         nonlocal sent_bytes, total_bytes, progress_percent, started
@@ -998,7 +1000,7 @@ def main() -> int:
                 total_hint = int(getattr(best_msg.file, "size", 0) or 0)
             except Exception:
                 total_hint = 0
-            progress_cb, progress_suffix = make_upload_progress_logger(total_hint, "download")
+            progress_cb, progress_suffix = make_upload_progress_logger(total_hint, "download", show_initial=True)
             run_wait_step(
                 "Download from Telegram",
                 lambda: download_file_with_timeout(

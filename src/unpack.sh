@@ -1081,6 +1081,9 @@ if ! git -C "$REPO_DIR" fetch --force "$bundle" "refs/heads/*:refs/remotes/$PEER
   die "Fetch failed."
 fi
 
+bundle_tag_count="$(awk '$2 ~ /^refs\\/tags\\// {c++} END{print c+0}' "$incoming_refs")"
+local_tag_count="$(git -C "$REPO_DIR" show-ref --tags 2>/dev/null | wc -l | awk '{print $1}')"
+info "Tags in bundle: $bundle_tag_count | local tags: ${local_tag_count:-0}"
 if [[ "$FORCE_TAGS" == "1" ]]; then
   info "Update tags (force)"
   git -C "$REPO_DIR" fetch --force "$bundle" "refs/tags/*:refs/tags/*" >/dev/null 2>/dev/null || true
@@ -1088,6 +1091,7 @@ else
   info "Update tags"
   git -C "$REPO_DIR" fetch "$bundle" "refs/tags/*:refs/tags/*" >/dev/null 2>/dev/null || true
 fi
+info "Tags updated"
 
 tag_conflicts=()
 while read -r sha ref; do
