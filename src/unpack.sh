@@ -415,9 +415,9 @@ download_pack_from_telegram() {
   fi
 
   if [[ -n "$meta_file" && -f "$meta_file" ]]; then
-    PULL_MSG_ID="$(awk -F= '$1==\"message_id\"{print $2}' "$meta_file" | tr -d '\r')"
-    PULL_FILE_NAME="$(awk -F= '$1==\"file_name\"{print $2}' "$meta_file" | tr -d '\r')"
-    status="$(awk -F= '$1==\"status\"{print $2}' "$meta_file" | tr -d '\r')"
+    PULL_MSG_ID="$(awk -F= '$1=="message_id"{print $2}' "$meta_file" | tr -d '\r')"
+    PULL_FILE_NAME="$(awk -F= '$1=="file_name"{print $2}' "$meta_file" | tr -d '\r')"
+    status="$(awk -F= '$1=="status"{print $2}' "$meta_file" | tr -d '\r')"
     if [[ "$status" == "acked" ]]; then
       PULL_ALREADY_ACKED="1"
       return 0
