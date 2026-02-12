@@ -853,10 +853,6 @@ cleanup() {
     if [[ "$PULL_SKIP_FAILLOG" != "1" ]]; then
       send_failure_log
     fi
-    if [[ "$PULL_SKIP_ACK" != "1" ]]; then
-      [[ -n "${ACK_NOTE:-}" ]] || ACK_NOTE="FAILED"
-      send_ack_message
-    fi
   else
     if [[ "$PULL_SKIP_ACK" != "1" ]]; then
       [[ -n "${ACK_NOTE:-}" ]] || ACK_NOTE="UNPACKED"
