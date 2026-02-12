@@ -1092,17 +1092,26 @@ fi
 info "Tags updated"
 
 tag_conflicts=()
-while read -r sha ref; do
-  [[ -n "$sha" && -n "$ref" ]] || continue
-  [[ "$ref" == refs/tags/* ]] || continue
-  tag="${ref#refs/tags/}"
-  if git -C "$REPO_DIR" show-ref --verify --quiet "refs/tags/$tag"; then
-    local_sha="$(git -C "$REPO_DIR" rev-parse "refs/tags/$tag")"
-    if [[ "$local_sha" != "$sha" ]]; then
-      tag_conflicts+=("$tag")
-    fi
-  fi
-done < "$incoming_refs"
+if [[ "$FORCE_TAGS" == "0" || "$FF_ONLY" == "1" ]]; then
+  info "Check tag conflicts"
+  local_tags="$tmp/local_tags.tsv"
+  git -C "$REPO_DIR" show-ref --tags 2>/dev/null | tr -d '\r' > "$local_tags" || true
+  conflicts_file="$tmp/tag_conflicts.txt"
+  awk '
+    FNR==NR {
+      if ($2 ~ /^refs\/tags\//) {
+        sub("^refs/tags/","",$2);
+        local[$2]=$1
+      }
+      next
+    }
+    $2 ~ /^refs\/tags\// {
+      sub("^refs/tags/","",$2);
+      if (($2 in local) && local[$2] != $1) print $2
+    }
+  ' "$local_tags" "$incoming_refs" > "$conflicts_file"
+  mapfile -t tag_conflicts < "$conflicts_file"
+fi
 
 if [[ "${#tag_conflicts[@]}" -gt 0 ]]; then
   if [[ "$FORCE_TAGS" == "0" ]]; then
