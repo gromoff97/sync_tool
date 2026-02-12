@@ -839,7 +839,10 @@ def main() -> int:
             if not peer_raw:
                 raise ValueError(f"{label} is required.")
             try:
-                return client.get_entity(peer_raw)
+                value = peer_raw
+                if re.fullmatch(r"-?\d+", peer_raw.strip() or ""):
+                    value = int(peer_raw)
+                return client.get_entity(value)
             except Exception:
                 raise ValueError(f"Cannot find any entity corresponding to \"{peer_raw}\"")
 
