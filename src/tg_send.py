@@ -839,7 +839,7 @@ def main() -> int:
             if not peer_raw:
                 raise ValueError(f"{label} is required.")
             try:
-                return client.get_input_entity(peer_raw)
+                return client.get_entity(peer_raw)
             except Exception:
                 raise ValueError(f"Cannot find any entity corresponding to \"{peer_raw}\"")
 
