@@ -835,12 +835,30 @@ def main() -> int:
                 py(f"No chats matched: {args.chat_filter}")
             return 0
 
+        def resolve_peer(peer_raw: str, label: str) -> object:
+            if not peer_raw:
+                raise ValueError(f"{label} is required.")
+            try:
+                return client.get_input_entity(peer_raw)
+            except Exception as exc:
+                try:
+                    target_id = int(peer_raw)
+                except Exception:
+                    raise exc
+                from telethon.utils import get_peer_id
+                for d in client.iter_dialogs():
+                    if get_peer_id(d.entity) == target_id:
+                        return d.entity
+                raise ValueError(
+                    f"Cannot resolve {label}={peer_raw}. "
+                    "Ensure the account is a member and use pack --list-chat to find the peer_id."
+                )
+
         if args.pull_latest:
             run_wait_step("Connect Telegram", client.connect)
             ensure_authorized()
             py(f"Authorized: {client.is_user_authorized()}")
-
-            entity = client.get_entity(from_peer)
+            entity = resolve_peer(from_peer, "telegram_from")
             pattern = re.compile(
                 rf"^{re.escape(args.pack_prefix)}_{re.escape(args.project_name)}_([0-9]{{8}}_[0-9]{{6}})\.tgz$"
             )
@@ -932,6 +950,8 @@ def main() -> int:
                 err(str(exc))
                 return 3
 
+        resolved_to_peer = resolve_peer(to_peer, "telegram_to")
+
         if args.require_ack:
             if not args.pack_prefix or not args.project_name:
                 err("--require-ack requires --pack-prefix and --project-name")
@@ -939,7 +959,7 @@ def main() -> int:
             ack_text = (args.ack_text or "Unpacked by").strip()
             if args.last_message_id:
                 ack_found = False
-                for msg in client.iter_messages(to_peer, limit=args.scan_limit):
+                for msg in client.iter_messages(resolved_to_peer, limit=args.scan_limit):
                     if not msg or not msg.message:
                         continue
                     if not ack_text or not msg.message.startswith(ack_text):
@@ -957,7 +977,7 @@ def main() -> int:
                 latest_pack = None
                 latest_pack_ts = ""
                 ack_reply_ids = set()
-                for msg in client.iter_messages(to_peer, limit=args.scan_limit):
+                for msg in client.iter_messages(resolved_to_peer, limit=args.scan_limit):
                     if msg and msg.message and ack_text and msg.message.startswith(ack_text):
                         if getattr(msg, "reply_to_msg_id", None):
                             ack_reply_ids.add(msg.reply_to_msg_id)
@@ -981,7 +1001,7 @@ def main() -> int:
             run_wait_step(
                 "Send message",
                 lambda: client.send_message(
-                    to_peer,
+                    resolved_to_peer,
                     args.text,
                     reply_to=args.reply_to or None,
                 ),
@@ -997,7 +1017,7 @@ def main() -> int:
             "Upload to Telegram",
             lambda: send_file_with_timeout(
                 client=client,
-                to_peer=to_peer,
+                to_peer=resolved_to_peer,
                 file_path=args.file,
                 caption=args.caption,
                 progress_callback=progress_cb,
