@@ -47,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mproto-login", action="store_true", help="Interactive MTProto login and connection test")
     parser.add_argument("--mtproto-test", dest="mproto_login", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--list-chats", action="store_true", help="List available chats with peer_id/access_hash")
+    parser.add_argument("--chat-filter", default="", help="Filter for list-chats (substring match)")
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values")
     return parser.parse_args()
 
@@ -806,7 +807,9 @@ def main() -> int:
             ensure_authorized()
             py(f"Authorized: {client.is_user_authorized()}")
             from telethon.utils import get_peer_id
+            filt = (args.chat_filter or "").strip().lower()
             py("Chats (groups/channels):")
+            matched = 0
             for d in client.iter_dialogs():
                 if not (d.is_group or d.is_channel):
                     continue
@@ -814,14 +817,22 @@ def main() -> int:
                 peer_id = get_peer_id(ent)
                 access_hash = getattr(ent, "access_hash", None)
                 username = getattr(ent, "username", None)
+                name = (d.name or "")
+                if filt:
+                    hay = f"{name} {username or ''}".lower()
+                    if filt not in hay:
+                        continue
                 kind = "group"
                 if getattr(ent, "broadcast", False):
                     kind = "channel"
                 elif getattr(ent, "megagroup", False):
                     kind = "supergroup"
                 py(
-                    f"{d.name} | {kind} | peer_id={peer_id} | access_hash={access_hash} | username={username or ''}"
+                    f"{name} | {kind} | peer_id={peer_id} | access_hash={access_hash} | username={username or ''}"
                 )
+                matched += 1
+            if filt and matched == 0:
+                py(f"No chats matched: {args.chat_filter}")
             return 0
 
         if args.pull_latest:

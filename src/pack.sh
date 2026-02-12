@@ -544,7 +544,7 @@ Options:
   --machine-name NAME      default: auto-detected; written to manifest only
   --dry-run                show what would be done without creating/sending
   --mproto-login           interactive MTProto login + connection test, writes <tool_dir>/conf/telegram.conf
-  --list-chats             list Telegram chats (with peer_id/access_hash) using telegram.conf
+  --list-chat TEXT         list Telegram chats containing TEXT (name or username)
   --help
 
 Subcommands:
@@ -593,7 +593,7 @@ EOF
 }
 
 list_telegram_chats() {
-  local config_file="$1"
+  local config_file="$1" filter_text="$2"
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -615,6 +615,7 @@ list_telegram_chats() {
     --session "$TG_SESSION"
     --config-file "$config_file"
     --list-chats
+    --chat-filter "$filter_text"
     --non-interactive
   )
   if [[ -n "$TG_PROXY" ]]; then
@@ -642,6 +643,7 @@ MACHINE_NAME=""
 SEND_TO_TELEGRAM="0"
 MPROTO_LOGIN="0"
 LIST_CHATS="0"
+LIST_CHAT_FILTER=""
 OTHER_OPTS_USED="0"
 TG_API_ID=""
 TG_API_HASH=""
@@ -680,7 +682,9 @@ while [[ $# -gt 0 ]]; do
     --machine-name=*)  MACHINE_NAME="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     --dry-run)         DRY_RUN="1"; shift 1;;
     --mproto-login)    MPROTO_LOGIN="1"; shift 1;;
-    --list-chats)      LIST_CHATS="1"; shift 1;;
+    --list-chats)      LIST_CHATS="1"; LIST_CHAT_FILTER=""; shift 1;;
+    --list-chat)       LIST_CHATS="1"; LIST_CHAT_FILTER="${2:-}"; shift 2;;
+    --list-chat=*)     LIST_CHATS="1"; LIST_CHAT_FILTER="${1#*=}"; shift 1;;
     --help|-h)         usage_main;;
     *) die "Unknown option: $1 (use --help)";;
   esac
@@ -729,7 +733,7 @@ if [[ "$LIST_CHATS" == "1" ]]; then
   load_telegram_config "$TELEGRAM_CONFIG_FILE"
   require_telegram_config "$TELEGRAM_CONFIG_FILE"
   log_pack "Telegram chats..."
-  list_telegram_chats "$TELEGRAM_CONFIG_FILE"
+  list_telegram_chats "$TELEGRAM_CONFIG_FILE" "$LIST_CHAT_FILTER"
   exit $?
 fi
 
