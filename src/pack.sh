@@ -650,8 +650,8 @@ Options:
   --pack-prefix PREFIX     default: syncpack
   --machine-name NAME      default: auto-detected; written to manifest only
   -u, --update-remote      fetch recent branches from remote before pack
-  --remote NAME            remote name required with -u
-  --recent-months N        how many months back is "recent" (default: 3)
+  --remote NAME            remote name (default: origin; required with -u)
+  --recent-months N        how many months back is "recent" (default: 6)
   --branch NAME            pack only this branch (no tags by default)
   --branches LIST          pack only these branches (comma-separated)
   --with-tags 0|1          include tags (default: 1 for all branches, 0 for selected branches)
@@ -682,8 +682,8 @@ Options (same as pack):
   --pack-prefix PREFIX     default: syncpack
   --machine-name NAME      default: auto-detected; written to manifest only
   -u, --update-remote      fetch recent branches from remote before pack
-  --remote NAME            remote name required with -u
-  --recent-months N        how many months back is "recent" (default: 3)
+  --remote NAME            remote name (default: origin; required with -u)
+  --recent-months N        how many months back is "recent" (default: 6)
   --branch NAME            pack only this branch (no tags by default)
   --branches LIST          pack only these branches (comma-separated)
   --with-tags 0|1          include tags (default: 1 for all branches, 0 for selected branches)
@@ -911,7 +911,7 @@ BRANCHES_RAW=""
 WITH_TAGS=""
 UPDATE_REMOTE="0"
 REMOTE_NAME=""
-RECENT_MONTHS="3"
+RECENT_MONTHS="6"
 
 want_push_help="0"
 want_help="0"
@@ -1025,7 +1025,9 @@ PROJECT_NAME="$(basename "$REPO_DIR")"
 PROJECT_NAME="$(sanitize_for_manifest "$PROJECT_NAME")"
 
 if [[ "$UPDATE_REMOTE" == "1" ]]; then
-  [[ -n "$REMOTE_NAME" ]] || die "--remote is required with -u/--update-remote"
+  if [[ -z "$REMOTE_NAME" ]]; then
+    REMOTE_NAME="origin"
+  fi
   [[ -z "$BRANCHES_RAW" ]] || die "-u cannot be combined with --branch/--branches"
   fetch_recent_remote_branches "$REMOTE_NAME" "$RECENT_MONTHS"
 fi
