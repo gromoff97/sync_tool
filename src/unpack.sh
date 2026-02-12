@@ -750,7 +750,7 @@ send_ack_message() {
     UNPACKED) suffix=" (unpacked)" ;;
     *) suffix=" (${reason})" ;;
   esac
-  local text="${prefix} *$MACHINE_NAME*${suffix}"
+  local text="${prefix} **${MACHINE_NAME}**${suffix}"
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
