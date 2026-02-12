@@ -766,7 +766,14 @@ send_ack_message() {
   esac
   local md_name
   md_name="$(escape_md "$MACHINE_NAME")"
+  local details="${ACK_DETAILS:-}"
+  if [[ -n "$details" ]]; then
+    details="$(escape_md "$details")"
+  fi
   local text="${prefix} **${md_name}**${suffix}"
+  if [[ -n "$details" ]]; then
+    text="${text} ${details}"
+  fi
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -1146,11 +1153,34 @@ if [[ "$FF_ONLY" == "1" ]]; then
     for i in "${!diverged[@]}"; do
       warn "  ${diverged[$i]} -> ${diverged_status[$i]}"
     done
+    older_list=()
+    newer_list=()
+    unknown_list=()
+    for i in "${!diverged[@]}"; do
+      case "${diverged_status[$i]}" in
+        "pack older than local") older_list+=("${diverged[$i]}") ;;
+        "pack newer than local") newer_list+=("${diverged[$i]}") ;;
+        *) unknown_list+=("${diverged[$i]}") ;;
+      esac
+    done
+    details=""
+    if [[ "${#older_list[@]}" -gt 0 ]]; then
+      details="${details} old:${older_list[*]}"
+    fi
+    if [[ "${#newer_list[@]}" -gt 0 ]]; then
+      [[ -n "$details" ]] && details="${details};"
+      details="${details} new:${newer_list[*]}"
+    fi
+    if [[ "${#unknown_list[@]}" -gt 0 ]]; then
+      [[ -n "$details" ]] && details="${details};"
+      details="${details} unknown:${unknown_list[*]}"
+    fi
     if [[ "$PULL_MODE" == "1" && -t 0 ]]; then
       read -r -p "Send close message to allow next pack? [y/N] " _close_ans
       case "${_close_ans:-}" in
         y|Y|yes|YES)
           ACK_NOTE="DIVERGED"
+          ACK_DETAILS="$details"
           send_ack_message
           PULL_SKIP_ACK="1"
           PULL_SKIP_FAILLOG="1"
