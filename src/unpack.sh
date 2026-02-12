@@ -1110,9 +1110,9 @@ if [[ "$MODE" == "existing" ]]; then
       identical="0"
     elif [[ "$PACK_TAGS_INCLUDED" == "1" && ! -s "$incoming_tags" ]]; then
       :
-    elif [[ "$PACK_TAGS_INCLUDED" == "1" && ! cmp -s "$incoming_tags" "$local_tags" ]]; then
+    elif [[ "$PACK_TAGS_INCLUDED" == "1" ]] && ! cmp -s "$incoming_tags" "$local_tags"; then
       identical="0"
-    elif [[ "$PACK_HAS_REMOTE" == "1" && ! cmp -s "$incoming_remote" "$local_remote" ]]; then
+    elif [[ "$PACK_HAS_REMOTE" == "1" ]] && ! cmp -s "$incoming_remote" "$local_remote"; then
       identical="0"
     fi
 
