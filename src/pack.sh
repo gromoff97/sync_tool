@@ -207,7 +207,7 @@ load_telegram_config() {
   TG_PASSWORD=""
   TG_PROXY=""
   TG_ACK_REQUIRED="1"
-  TG_ACK_TEXT="Unpacked by"
+  TG_ACK_TEXT="Closed by"
   TG_ACK_SCAN_LIMIT="32"
   TG_CAPTION=""
   TG_PYTHON_MIN="3.8"

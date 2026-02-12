@@ -849,8 +849,8 @@ def main() -> int:
             pattern = re.compile(
                 rf"^{re.escape(args.pack_prefix)}_{re.escape(args.project_name)}_([0-9]{{8}}_[0-9]{{6}})\.tgz$"
             )
-            ack_text = (args.ack_text or "Unpacked by").strip()
-            ack_prefixes = [ack_text, "Closed by"]
+            ack_text = (args.ack_text or "Closed by").strip()
+            ack_prefixes = [ack_text]
             ack_reply_ids = set()
 
             best_msg = None
@@ -949,8 +949,8 @@ def main() -> int:
             if not args.pack_prefix or not args.project_name:
                 err("--require-ack requires --pack-prefix and --project-name")
                 return 3
-            ack_text = (args.ack_text or "Unpacked by").strip()
-            ack_prefixes = [ack_text, "Closed by"]
+            ack_text = (args.ack_text or "Closed by").strip()
+            ack_prefixes = [ack_text]
             if args.last_message_id:
                 ack_found = False
                 for msg in client.iter_messages(resolved_to_peer, limit=args.scan_limit):
@@ -962,7 +962,7 @@ def main() -> int:
                         ack_found = True
                         break
                 if not ack_found:
-                    err("Previous pack not acknowledged yet. Wait for 'Unpacked by ...' or 'Closed by ...' reply.")
+                    err("Previous pack not acknowledged yet. Wait for 'Closed by ...' reply.")
                     return 4
             else:
                 pattern = re.compile(
@@ -989,7 +989,7 @@ def main() -> int:
                         latest_pack = msg
 
                 if latest_pack and latest_pack.id not in ack_reply_ids:
-                    err("Previous pack not acknowledged yet. Wait for 'Unpacked by ...' or 'Closed by ...' reply.")
+                    err("Previous pack not acknowledged yet. Wait for 'Closed by ...' reply.")
                     return 4
 
         if args.text:

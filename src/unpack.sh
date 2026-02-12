@@ -740,12 +740,12 @@ META_FILE="$tmp/pull_meta.txt"
 send_ack_message() {
   [[ "$PULL_MODE" == "1" ]] || return 0
   [[ -n "$TG_FROM" && -n "$PULL_MSG_ID" ]] || return 0
-  local prefix="Unpacked by"
+  local prefix="Closed by"
   local suffix=""
   case "${ACK_NOTE:-}" in
     NO_CHANGES) suffix=" (no changes)" ;;
-    DIVERGED) prefix="Closed by"; suffix=" (diverged)" ;;
-    FAILED) prefix="Closed by"; suffix=" (failed)" ;;
+    DIVERGED) suffix=" (diverged)" ;;
+    FAILED) suffix=" (failed)" ;;
   esac
   local text="${prefix} *$MACHINE_NAME*${suffix}"
   local -a py_cmd cmd
