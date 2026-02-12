@@ -122,6 +122,20 @@ trim_ws() {
   printf '%s' "$s"
 }
 
+escape_md() {
+  # Escape common Markdown meta chars for Telegram 'md' parse mode.
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\*/\\*}"
+  s="${s//_/\\_}"
+  s="${s//\`/\\\`}"
+  s="${s//[/\\[}"
+  s="${s//]/\\]}"
+  s="${s//(/\\(}"
+  s="${s//)/\\)}"
+  printf '%s' "$s"
+}
+
 strip_quotes() {
   local s="$1"
   if [[ ${#s} -ge 2 ]]; then
@@ -750,7 +764,9 @@ send_ack_message() {
     UNPACKED) suffix=" (unpacked)" ;;
     *) suffix=" (${reason})" ;;
   esac
-  local text="${prefix} **${MACHINE_NAME}**${suffix}"
+  local md_name
+  md_name="$(escape_md "$MACHINE_NAME")"
+  local text="${prefix} **${md_name}**${suffix}"
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
