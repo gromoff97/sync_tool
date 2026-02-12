@@ -235,14 +235,17 @@ def run_wait_step(step_label: str, action: Callable[[], T], status_suffix: Optio
             worker.join(timeout=0.2)
 
 
-def make_upload_progress_logger(initial_total_bytes: int = 0) -> Tuple[Callable[[int, int], None], Callable[[], str]]:
+def make_upload_progress_logger(
+    initial_total_bytes: int = 0, phase_label: str = "transfer"
+) -> Tuple[Callable[[int, int], None], Callable[[], str]]:
     lock = threading.Lock()
     sent_bytes = 0
     total_bytes = max(0, int(initial_total_bytes or 0))
     progress_percent = 0
+    started = False
 
     def cb(sent: int, total: int) -> None:
-        nonlocal sent_bytes, total_bytes, progress_percent
+        nonlocal sent_bytes, total_bytes, progress_percent, started
         if total <= 0:
             return
         percent = int((max(0, sent) * 100) / total)
@@ -250,11 +253,12 @@ def make_upload_progress_logger(initial_total_bytes: int = 0) -> Tuple[Callable[
             sent_bytes = max(0, sent)
             total_bytes = max(0, total)
             progress_percent = max(0, min(100, percent))
+            started = True
 
     def suffix() -> str:
         with lock:
-            if total_bytes <= 0:
-                return f" | {render_progress_bar(0)} 0%"
+            if not started:
+                return f" | waiting for {phase_label}..."
             sent_text = format_bytes(sent_bytes)
             total_text = format_bytes(total_bytes)
             pct = max(0, min(100, progress_percent))
@@ -906,7 +910,7 @@ def main() -> int:
                 total_hint = int(getattr(best_msg.file, "size", 0) or 0)
             except Exception:
                 total_hint = 0
-            progress_cb, progress_suffix = make_upload_progress_logger(total_hint)
+            progress_cb, progress_suffix = make_upload_progress_logger(total_hint, "download")
             run_wait_step(
                 "Download from Telegram",
                 lambda: download_file_with_timeout(
@@ -1004,7 +1008,7 @@ def main() -> int:
                 total_hint = int(os.path.getsize(args.file))
             except OSError:
                 total_hint = 0
-        progress_cb, progress_suffix = make_upload_progress_logger(total_hint)
+        progress_cb, progress_suffix = make_upload_progress_logger(total_hint, "upload")
         result = run_wait_step(
             "Upload to Telegram",
             lambda: send_file_with_timeout(
