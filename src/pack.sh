@@ -634,6 +634,141 @@ list_telegram_chats() {
   fi
 }
 
+check_telegram_ack() {
+  local config_file="$1" meta_file="$2" current_sha="$3"
+  local -a py_cmd cmd
+  select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
+  py_cmd=("${PY_CMD[@]}" "-u")
+  log_pack "Telegram python: $(python_exec_path_cmd "${PY_CMD[@]}")"
+
+  local script_dir script_path
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  script_path="$script_dir/tg_send.py"
+  [[ -f "$script_path" ]] || die "Telegram sender script not found: $script_path"
+
+  # Git Bash + Windows console Python can lose interactive prompts without winpty.
+  if have winpty && [[ -t 0 && -t 1 ]]; then
+    py_cmd=("winpty" "${py_cmd[@]}")
+  fi
+
+  cmd=("${py_cmd[@]}" "$script_path"
+    --api-id "$TG_API_ID"
+    --api-hash "$TG_API_HASH"
+    --session "$TG_SESSION"
+    --config-file "$config_file"
+    --to "$TG_TO"
+    --pack-prefix "$PACK_PREFIX"
+    --project-name "$PROJECT_NAME"
+    --scan-limit "$TG_ACK_SCAN_LIMIT"
+    --ack-text "$TG_ACK_TEXT"
+    --check-ack
+    --meta-file "$meta_file"
+    --current-sha "$current_sha"
+    --non-interactive
+  )
+  if [[ -n "$TG_PROXY" ]]; then
+    cmd+=(--proxy "$TG_PROXY")
+  fi
+  if [[ -n "$TG_SESSION_STRING" ]]; then
+    cmd+=(--session-string "$TG_SESSION_STRING")
+  fi
+
+  if [[ -z "$C_RESET" ]]; then
+    NO_COLOR=1 "${cmd[@]}"
+  elif [[ "$USE_256_COLOR" == "1" ]]; then
+    FORCE_COLOR=1 FORCE_256_COLOR=1 "${cmd[@]}"
+  else
+    FORCE_COLOR=1 "${cmd[@]}"
+  fi
+}
+
+send_telegram_close() {
+  local config_file="$1" msg_id="$2" reason="$3"
+  local -a py_cmd cmd
+  select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
+  py_cmd=("${PY_CMD[@]}" "-u")
+
+  local script_dir script_path
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  script_path="$script_dir/tg_send.py"
+  [[ -f "$script_path" ]] || die "Telegram sender script not found: $script_path"
+
+  local text="Closed by **$(escape_md "$MACHINE_NAME")**"
+  if [[ -n "$reason" ]]; then
+    text="${text} (${reason})"
+  fi
+
+  if have winpty && [[ -t 0 && -t 1 ]]; then
+    py_cmd=("winpty" "${py_cmd[@]}")
+  fi
+
+  cmd=("${py_cmd[@]}" "$script_path"
+    --api-id "$TG_API_ID"
+    --api-hash "$TG_API_HASH"
+    --session "$TG_SESSION"
+    --config-file "$config_file"
+    --to "$TG_TO"
+    --text "$text"
+    --reply-to "$msg_id"
+    --parse-mode md
+    --non-interactive
+  )
+  if [[ -n "$TG_PROXY" ]]; then
+    cmd+=(--proxy "$TG_PROXY")
+  fi
+  if [[ -n "$TG_SESSION_STRING" ]]; then
+    cmd+=(--session-string "$TG_SESSION_STRING")
+  fi
+
+  if [[ -z "$C_RESET" ]]; then
+    NO_COLOR=1 "${cmd[@]}"
+  elif [[ "$USE_256_COLOR" == "1" ]]; then
+    FORCE_COLOR=1 FORCE_256_COLOR=1 "${cmd[@]}"
+  else
+    FORCE_COLOR=1 "${cmd[@]}"
+  fi
+}
+
+delete_telegram_message() {
+  local config_file="$1" msg_id="$2"
+  local -a py_cmd cmd
+  select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
+  py_cmd=("${PY_CMD[@]}" "-u")
+
+  local script_dir script_path
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  script_path="$script_dir/tg_send.py"
+  [[ -f "$script_path" ]] || die "Telegram sender script not found: $script_path"
+
+  if have winpty && [[ -t 0 && -t 1 ]]; then
+    py_cmd=("winpty" "${py_cmd[@]}")
+  fi
+
+  cmd=("${py_cmd[@]}" "$script_path"
+    --api-id "$TG_API_ID"
+    --api-hash "$TG_API_HASH"
+    --session "$TG_SESSION"
+    --config-file "$config_file"
+    --to "$TG_TO"
+    --delete-message "$msg_id"
+    --non-interactive
+  )
+  if [[ -n "$TG_PROXY" ]]; then
+    cmd+=(--proxy "$TG_PROXY")
+  fi
+  if [[ -n "$TG_SESSION_STRING" ]]; then
+    cmd+=(--session-string "$TG_SESSION_STRING")
+  fi
+
+  if [[ -z "$C_RESET" ]]; then
+    NO_COLOR=1 "${cmd[@]}"
+  elif [[ "$USE_256_COLOR" == "1" ]]; then
+    FORCE_COLOR=1 FORCE_256_COLOR=1 "${cmd[@]}"
+  else
+    FORCE_COLOR=1 "${cmd[@]}"
+  fi
+}
+
 # ---- parse args ----
 require_tools
 
@@ -788,6 +923,7 @@ if ! git -C "$REPO_DIR" bundle verify "$bundle" >"$verify_out" 2>&1; then
 fi
 
 bundle_sha="$(sha256_file "$bundle")"
+bundle_sha_short="${bundle_sha:0:12}"
 
 {
   echo -e "key\tvalue"
@@ -853,6 +989,42 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
 
   log_pack "Telegram send..."
   DELETE_FINAL_ON_EXIT="1"
+  ack_meta="$tmp/ack_meta.txt"
+  rm -f -- "$ack_meta" 2>/dev/null || true
+  if ! check_telegram_ack "$TELEGRAM_CONFIG_FILE" "$ack_meta" "$bundle_sha_short"; then
+    ack_rc=$?
+    if [[ "$ack_rc" == "5" ]]; then
+      die "Latest pack already closed with same SHA."
+    elif [[ "$ack_rc" == "4" ]]; then
+      if [[ -f "$ack_meta" ]]; then
+        ack_status="$(awk -F= '$1=="status"{print $2}' "$ack_meta" | tr -d '\r')"
+        if [[ "$ack_status" == "unacked" ]]; then
+          ack_msg_id="$(awk -F= '$1=="message_id"{print $2}' "$ack_meta" | tr -d '\r')"
+          ack_file="$(awk -F= '$1=="file_name"{print $2}' "$ack_meta" | tr -d '\r')"
+          [[ -n "$ack_msg_id" ]] || die "Previous pack is unacked, but message_id is missing."
+          log_pack "Previous pack unprocessed: ${ack_file:-unknown}"
+          if [[ -t 0 ]]; then
+            read -r -p "Delete old pack and continue? [y/N] " _ack_ans
+            case "${_ack_ans:-}" in
+              y|Y|yes|YES)
+                log_pack "Closing previous pack as replaced..."
+                send_telegram_close "$TELEGRAM_CONFIG_FILE" "$ack_msg_id" "replaced"
+                log_pack "Deleting previous pack message..."
+                delete_telegram_message "$TELEGRAM_CONFIG_FILE" "$ack_msg_id"
+                ;;
+              *)
+                die "Previous pack not acknowledged."
+                ;;
+            esac
+          else
+            die "Previous pack not acknowledged."
+          fi
+        fi
+      fi
+    else
+      die "Telegram ack check failed."
+    fi
+  fi
   send_to_telegram_personal "$final_path" "$TG_CAPTION" "$TELEGRAM_CONFIG_FILE"
   rm -f -- "$final_path" || die "Uploaded to Telegram, but failed to delete local pack: $final_path"
   DELETE_FINAL_ON_EXIT="0"

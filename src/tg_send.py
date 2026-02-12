@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--meta-file", default="")
     parser.add_argument("--scan-limit", type=int, default=200)
     parser.add_argument("--require-ack", action="store_true")
-    parser.add_argument("--ack-text", default="Unpacked by")
+    parser.add_argument("--ack-text", default="Closed by")
     parser.add_argument("--machine-name", default="")
     parser.add_argument("--reply-to", type=int, default=0)
     parser.add_argument("--last-message-id", type=int, default=0)
@@ -49,6 +49,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--list-chats", action="store_true", help="List available chats with peer_id/access_hash")
     parser.add_argument("--chat-filter", default="", help="Filter for list-chats (substring match)")
     parser.add_argument("--parse-mode", default="", help="Force parse mode (e.g. md)")
+    parser.add_argument("--check-ack", action="store_true", help="Only check whether latest pack is closed")
+    parser.add_argument("--delete-message", type=int, default=0, help="Delete a message by id in the target chat")
+    parser.add_argument("--current-sha", default="", help="Current bundle sha (short) to detect duplicates")
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values")
     return parser.parse_args()
 
@@ -381,7 +384,7 @@ def extract_pack_timestamp(name: str) -> str:
 
 
 def _unpack_ack_text(text: str, machine: str) -> str:
-    base = (text or "Unpacked by").strip()
+    base = (text or "Closed by").strip()
     if machine:
         return f"{base} {machine}"
     return base
@@ -496,8 +499,12 @@ def main() -> int:
 
     if not args.mproto_login:
         if args.list_chats:
-            if args.pull_latest or args.file or args.text:
+            if args.pull_latest or args.file or args.text or args.check_ack or args.delete_message:
                 err("list-chats cannot be combined with file/text/pull-latest")
+                return 1
+        if args.check_ack or args.delete_message:
+            if args.pull_latest or args.file or args.text:
+                err("check-ack/delete-message cannot be combined with file/text/pull-latest")
                 return 1
         else:
             if args.pull_latest and (args.file or args.text):
@@ -800,6 +807,92 @@ def main() -> int:
             update_conf_file(args.config_file, updates=updates, remove_keys=remove_keys)
             return 0
 
+        def resolve_peer(peer_raw: str, label: str) -> object:
+            if not peer_raw:
+                raise ValueError(f"{label} is required.")
+            try:
+                return client.get_input_entity(peer_raw)
+            except Exception:
+                raise ValueError(f"Cannot find any entity corresponding to \"{peer_raw}\"")
+
+        if args.check_ack:
+            run_wait_step("Connect Telegram", client.connect)
+            ensure_authorized()
+            py(f"Authorized: {client.is_user_authorized()}")
+            resolved_to_peer = resolve_peer(to_peer, "telegram_to")
+            if not args.pack_prefix or not args.project_name:
+                err("--check-ack requires --pack-prefix and --project-name")
+                return 3
+            ack_text = (args.ack_text or "Closed by").strip()
+            pattern = re.compile(
+                rf"^{re.escape(args.pack_prefix)}_{re.escape(args.project_name)}_([0-9]{{8}}_[0-9]{{6}})\.tgz$"
+            )
+            latest_pack = None
+            latest_pack_ts = ""
+            ack_by_reply = {}
+            for msg in client.iter_messages(resolved_to_peer, limit=args.scan_limit):
+                if msg and msg.message and ack_text and msg.message.startswith(ack_text):
+                    if getattr(msg, "reply_to_msg_id", None):
+                        ack_by_reply[msg.reply_to_msg_id] = msg.message
+                    continue
+                if not msg or not msg.file:
+                    continue
+                name = getattr(msg.file, "name", "") or ""
+                m = pattern.match(name)
+                if not m:
+                    continue
+                ts = m.group(1)
+                if ts > latest_pack_ts:
+                    latest_pack_ts = ts
+                    latest_pack = msg
+            if not latest_pack:
+                py(
+                    f"No previous packs found (checked last {args.scan_limit} messages for "
+                    f"{args.pack_prefix}_{args.project_name}_*.tgz)."
+                )
+                return 0
+
+            ack_msg = ack_by_reply.get(latest_pack.id)
+            if ack_msg:
+                current_sha = (args.current_sha or "").strip().lower()
+                if current_sha:
+                    m = re.search(r"sha:([0-9a-fA-F]{6,64})", ack_msg)
+                    if m and current_sha.startswith(m.group(1).lower()):
+                        err("Latest pack already closed with same SHA.")
+                        return 5
+                if args.meta_file:
+                    try:
+                        with open(args.meta_file, "w", encoding="utf-8") as fh:
+                            fh.write(f"message_id={latest_pack.id}\n")
+                            fh.write(f"file_name={getattr(latest_pack.file,'name','')}\n")
+                            fh.write("status=acked\n")
+                    except OSError:
+                        pass
+                return 0
+
+            if args.meta_file:
+                try:
+                    with open(args.meta_file, "w", encoding="utf-8") as fh:
+                        fh.write(f"message_id={latest_pack.id}\n")
+                        fh.write(f"file_name={getattr(latest_pack.file,'name','')}\n")
+                        fh.write("status=unacked\n")
+                except OSError:
+                    pass
+            err("Previous pack not acknowledged yet. Wait for 'Closed by ...' reply.")
+            return 4
+
+        if args.delete_message:
+            run_wait_step("Connect Telegram", client.connect)
+            ensure_authorized()
+            py(f"Authorized: {client.is_user_authorized()}")
+            resolved_to_peer = resolve_peer(to_peer, "telegram_to")
+            run_wait_step(
+                "Delete message",
+                lambda: client.delete_messages(resolved_to_peer, [args.delete_message]),
+            )
+            py("Message deleted.")
+            return 0
+
         if args.list_chats:
             run_wait_step("Connect Telegram", client.connect)
             ensure_authorized()
@@ -832,14 +925,6 @@ def main() -> int:
             if filt and matched == 0:
                 py(f"No chats matched: {args.chat_filter}")
             return 0
-
-        def resolve_peer(peer_raw: str, label: str) -> object:
-            if not peer_raw:
-                raise ValueError(f"{label} is required.")
-            try:
-                return client.get_input_entity(peer_raw)
-            except Exception:
-                raise ValueError(f"Cannot find any entity corresponding to \"{peer_raw}\"")
 
         if args.pull_latest:
             run_wait_step("Connect Telegram", client.connect)

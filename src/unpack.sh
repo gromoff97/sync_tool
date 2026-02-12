@@ -202,7 +202,7 @@ load_telegram_config() {
   TG_CODE=""
   TG_PASSWORD=""
   TG_PROXY=""
-  TG_ACK_TEXT="Unpacked by"
+  TG_ACK_TEXT="Closed by"
   TG_PYTHON_MIN="3.8"
 
   [[ -f "$cfg" ]] || return 0
@@ -741,13 +741,20 @@ send_ack_message() {
   [[ "$PULL_MODE" == "1" ]] || return 0
   [[ -n "$TG_FROM" && -n "$PULL_MSG_ID" ]] || return 0
   local prefix="Closed by"
+  local reason="${ACK_NOTE:-UNPACKED}"
   local suffix=""
-  case "${ACK_NOTE:-}" in
+  case "$reason" in
     NO_CHANGES) suffix=" (no changes)" ;;
     DIVERGED) suffix=" (diverged)" ;;
     FAILED) suffix=" (failed)" ;;
+    UNPACKED) suffix=" (unpacked)" ;;
+    *) suffix=" (${reason})" ;;
   esac
-  local text="${prefix} *$MACHINE_NAME*${suffix}"
+  local sha_suffix=""
+  if [[ -n "${ACK_SHA_SHORT:-}" ]]; then
+    sha_suffix=" sha:${ACK_SHA_SHORT}"
+  fi
+  local text="${prefix} *$MACHINE_NAME*${suffix}${sha_suffix}"
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -827,8 +834,13 @@ cleanup() {
     if [[ "$PULL_SKIP_FAILLOG" != "1" ]]; then
       send_failure_log
     fi
+    if [[ "$PULL_SKIP_ACK" != "1" ]]; then
+      [[ -n "${ACK_NOTE:-}" ]] || ACK_NOTE="FAILED"
+      send_ack_message
+    fi
   else
     if [[ "$PULL_SKIP_ACK" != "1" ]]; then
+      [[ -n "${ACK_NOTE:-}" ]] || ACK_NOTE="UNPACKED"
       send_ack_message
     fi
   fi
@@ -929,9 +941,11 @@ if [[ -n "$manifest_project_name" && "$manifest_project_name" != "$PROJECT_NAME"
   die "Project mismatch (pack='$manifest_project_name', expected='$PROJECT_NAME')."
 fi
 
+ACK_SHA_SHORT=""
 expected_bundle_sha="$(read_manifest_value "$manifest" bundle_sha256 || true)"
 if [[ -n "${expected_bundle_sha:-}" ]]; then
   actual_bundle_sha="$(sha256_file "$bundle")"
+  ACK_SHA_SHORT="${expected_bundle_sha:0:12}"
   info "Bundle SHA256: pack=$expected_bundle_sha local=$actual_bundle_sha"
   [[ "$actual_bundle_sha" == "$expected_bundle_sha" ]] || die "Bundle SHA256 mismatch (corrupted transfer?)"
 else
