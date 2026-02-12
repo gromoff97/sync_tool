@@ -15,15 +15,18 @@ supports_256_color() {
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   C_RESET=$'\033[0m'
   if supports_256_color; then
+    USE_256_COLOR="1"
     C_APP=$'\033[36m'
     C_WRN=$'\033[33m'
     C_ERR=$'\033[38;5;196m'
   else
+    USE_256_COLOR="0"
     C_APP=$'\033[36m'
     C_WRN=$'\033[33m'
     C_ERR=$'\033[31m'
   fi
 else
+  USE_256_COLOR="0"
   C_RESET=''
   C_APP=''
   C_WRN=''
