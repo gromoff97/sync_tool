@@ -320,6 +320,41 @@ python_candidates_from_globs() {
   shopt -u nullglob
 }
 
+select_default_remote() {
+  local remotes
+  remotes="$(git -C "$REPO_DIR" remote 2>/dev/null | tr -d '\r')"
+  [[ -n "$remotes" ]] || return 1
+  if echo "$remotes" | awk 'NR==1{first=$0} END{print NR, first}' | awk '{exit ($1==1)?0:1}'; then
+    printf '%s' "$remotes" | head -n 1
+    return 0
+  fi
+  if git -C "$REPO_DIR" remote | grep -qx "origin"; then
+    printf '%s' "origin"
+    return 0
+  fi
+  printf '%s' "$remotes" | head -n 1
+}
+
+ensure_branch_available() {
+  local b="$1"
+  if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
+    return 0
+  fi
+
+  local remote
+  remote="$(select_default_remote || true)"
+  [[ -n "$remote" ]] || die "Branch not found locally and no git remotes to fetch from: $b"
+
+  log_git "Fetching branch '$b' from '$remote'..."
+  if ! git -C "$REPO_DIR" fetch "$remote" "$b" >/dev/null 2>&1; then
+    die "Failed to fetch branch '$b' from '$remote'."
+  fi
+  if git -C "$REPO_DIR" show-ref --verify --quiet "refs/remotes/$remote/$b"; then
+    git -C "$REPO_DIR" branch "$b" "$remote/$b" >/dev/null 2>&1 || true
+  fi
+  git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b" || die "Branch not found after fetch: $b"
+}
+
 select_python_for_telegram() {
   local min_ver="$1"
   shift
@@ -928,9 +963,7 @@ if [[ "${#branches_selected[@]}" -gt 0 ]]; then
     WITH_TAGS="0"
   fi
   for b in "${branches_selected[@]}"; do
-    if ! git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
-      die "Branch not found: $b"
-    fi
+    ensure_branch_available "$b"
   done
 else
   if [[ -z "$WITH_TAGS" ]]; then
