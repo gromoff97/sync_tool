@@ -840,19 +840,8 @@ def main() -> int:
                 raise ValueError(f"{label} is required.")
             try:
                 return client.get_input_entity(peer_raw)
-            except Exception as exc:
-                try:
-                    target_id = int(peer_raw)
-                except Exception:
-                    raise exc
-                from telethon.utils import get_peer_id
-                for d in client.iter_dialogs():
-                    if get_peer_id(d.entity) == target_id:
-                        return d.entity
-                raise ValueError(
-                    f"Cannot resolve {label}={peer_raw}. "
-                    "Ensure the account is a member and use pack --list-chat to find the peer_id."
-                )
+            except Exception:
+                raise ValueError(f"Cannot find any entity corresponding to \"{peer_raw}\"")
 
         if args.pull_latest:
             run_wait_step("Connect Telegram", client.connect)
