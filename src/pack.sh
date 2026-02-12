@@ -190,6 +190,9 @@ load_config_overrides() {
       output_dir|OUTPUT_DIR)       OUTPUT_DIR="$(expand_user_path "$value")" ;;
       pack_prefix|PACK_PREFIX)     PACK_PREFIX="$value" ;;
       machine_name|MACHINE_NAME)   MACHINE_NAME="$value" ;;
+      branches|BRANCHES)           BRANCHES_RAW="$value" ;;
+      branch|BRANCH)               BRANCHES_RAW="$value" ;;
+      with_tags|WITH_TAGS)         WITH_TAGS="$value" ;;
       *) ;;
     esac
   done < "$cfg"
@@ -542,6 +545,9 @@ Options:
   --output-dir PATH        default: ~/syncpacks
   --pack-prefix PREFIX     default: syncpack
   --machine-name NAME      default: auto-detected; written to manifest only
+  --branch NAME            pack only this branch (no tags by default)
+  --branches LIST          pack only these branches (comma-separated)
+  --with-tags 0|1          include tags (default: 1 for all branches, 0 for selected branches)
   --dry-run                show what would be done without creating/sending
   --mproto-login           interactive MTProto login + connection test, writes <tool_dir>/conf/telegram.conf
   --list-chat TEXT         list Telegram chats containing TEXT (name or username)
@@ -568,6 +574,9 @@ Options (same as pack):
   --output-dir PATH        default: ~/syncpacks
   --pack-prefix PREFIX     default: syncpack
   --machine-name NAME      default: auto-detected; written to manifest only
+  --branch NAME            pack only this branch (no tags by default)
+  --branches LIST          pack only these branches (comma-separated)
+  --with-tags 0|1          include tags (default: 1 for all branches, 0 for selected branches)
   --dry-run                show what would be done without creating/sending
   --help
 
@@ -788,6 +797,8 @@ TG_CAPTION=""
 final_path=""
 DELETE_FINAL_ON_EXIT="0"
 DRY_RUN="0"
+BRANCHES_RAW=""
+WITH_TAGS=""
 
 want_push_help="0"
 want_help="0"
@@ -815,6 +826,12 @@ while [[ $# -gt 0 ]]; do
     --pack-prefix=*)   PACK_PREFIX="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     --machine-name)    MACHINE_NAME="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
     --machine-name=*)  MACHINE_NAME="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
+    --branch)          BRANCHES_RAW="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
+    --branch=*)        BRANCHES_RAW="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
+    --branches)        BRANCHES_RAW="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
+    --branches=*)      BRANCHES_RAW="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
+    --with-tags)       WITH_TAGS="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
+    --with-tags=*)     WITH_TAGS="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     --dry-run)         DRY_RUN="1"; shift 1;;
     --mproto-login)    MPROTO_LOGIN="1"; shift 1;;
     --list-chats)      LIST_CHATS="1"; LIST_CHAT_FILTER=""; shift 1;;
@@ -846,6 +863,9 @@ load_config_overrides "$CONFIG_FILE"
 [[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
 if [[ "$MPROTO_LOGIN" != "1" && "$LIST_CHATS" != "1" ]]; then
   [[ -n "$OUTPUT_DIR" ]] || die "HOME is not set; use --output-dir PATH."
+fi
+if [[ -n "$WITH_TAGS" && "$WITH_TAGS" != "0" && "$WITH_TAGS" != "1" ]]; then
+  die "--with-tags must be 0|1"
 fi
 
 if [[ "$MPROTO_LOGIN" == "1" ]]; then
@@ -890,6 +910,49 @@ log_pack "Out: $OUTPUT_DIR"
 
 repo_roots_sha="$(repo_roots_fingerprint "$REPO_DIR")"
 
+# Resolve branch selection and content description
+branches_selected=()
+if [[ -n "$BRANCHES_RAW" ]]; then
+  tmp_br="${BRANCHES_RAW//,/ }"
+  read -r -a branches_selected <<< "$tmp_br"
+  cleaned=()
+  for b in "${branches_selected[@]}"; do
+    b="$(trim_ws "$b")"
+    [[ -n "$b" ]] && cleaned+=("$b")
+  done
+  branches_selected=("${cleaned[@]}")
+fi
+
+if [[ "${#branches_selected[@]}" -gt 0 ]]; then
+  if [[ -z "$WITH_TAGS" ]]; then
+    WITH_TAGS="0"
+  fi
+  for b in "${branches_selected[@]}"; do
+    if ! git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
+      die "Branch not found: $b"
+    fi
+  done
+else
+  if [[ -z "$WITH_TAGS" ]]; then
+    WITH_TAGS="1"
+  fi
+fi
+
+content_branches="all"
+content_desc="branches"
+if [[ "${#branches_selected[@]}" -gt 0 ]]; then
+  content_branches="$(IFS=','; printf '%s' "${branches_selected[*]}")"
+  if [[ "${#branches_selected[@]}" -eq 1 ]]; then
+    content_desc="branch ${branches_selected[0]}"
+  else
+    content_desc="branches ${content_branches}"
+  fi
+fi
+if [[ "$WITH_TAGS" == "1" ]]; then
+  content_desc="${content_desc} + tags"
+fi
+log_pack "Content: $content_desc"
+
 tmp="$(mktemp_dir)"
 cleanup() {
   local exit_code=$?
@@ -909,9 +972,20 @@ trap cleanup EXIT
 bundle="$tmp/bundle.bundle"
 manifest="$tmp/manifest.tsv"
 
-log_git "Bundle (branches+tags)..."
+log_git "Bundle ($content_desc)..."
 create_out="$tmp/git_bundle_create.txt"
-if ! git -C "$REPO_DIR" bundle create "$bundle" --branches --tags >"$create_out" 2>&1; then
+bundle_args=()
+if [[ "${#branches_selected[@]}" -gt 0 ]]; then
+  for b in "${branches_selected[@]}"; do
+    bundle_args+=("refs/heads/$b")
+  done
+else
+  bundle_args+=(--branches)
+fi
+if [[ "$WITH_TAGS" == "1" ]]; then
+  bundle_args+=(--tags)
+fi
+if ! git -C "$REPO_DIR" bundle create "$bundle" "${bundle_args[@]}" >"$create_out" 2>&1; then
   cat "$create_out" >&2
   die "git bundle create failed"
 fi
@@ -935,8 +1009,14 @@ bundle_sha_short="${bundle_sha:0:12}"
   echo -e "repo_head\t$(git -C "$REPO_DIR" rev-parse HEAD)"
   echo -e "repo_roots_sha256\t$repo_roots_sha"
   echo -e "bundle_sha256\t$bundle_sha"
+  echo -e "content_branches\t$content_branches"
+  echo -e "content_tags\t$WITH_TAGS"
   echo -e "branches_count\t$(git -C "$REPO_DIR" show-ref --heads | wc -l | awk '{print $1}')"
-  echo -e "tags_count\t$(git -C "$REPO_DIR" show-ref --tags 2>/dev/null | wc -l | awk '{print $1}')"
+  if [[ "$WITH_TAGS" == "1" ]]; then
+    echo -e "tags_count\t$(git -C "$REPO_DIR" show-ref --tags 2>/dev/null | wc -l | awk '{print $1}')"
+  else
+    echo -e "tags_count\t0"
+  fi
 } > "$manifest"
 
 ts="$(date +%Y%m%d_%H%M%S 2>/dev/null || date +%Y%m%d_%H%M%S)"
@@ -984,7 +1064,7 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
   fi
   [[ -n "$TG_TO" ]] || die "telegram_to is required. Set it in telegram.conf or enter it interactively."
   if [[ -z "$TG_CAPTION" ]]; then
-    TG_CAPTION="Packed by **$(escape_md "$MACHINE_NAME")**"$'\n'"project: $(escape_md "$PROJECT_NAME")"
+    TG_CAPTION="Packed by **$(escape_md "$MACHINE_NAME")**"$'\n'"project: $(escape_md "$PROJECT_NAME")"$'\n'"content: $(escape_md "$content_desc")"
   fi
 
   log_pack "Telegram send..."

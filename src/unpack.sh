@@ -136,6 +136,32 @@ escape_md() {
   printf '%s' "$s"
 }
 
+format_list() {
+  local max=15
+  local -a items=("$@")
+  local count="${#items[@]}"
+  if [[ "$count" -eq 0 ]]; then
+    printf '%s' ""
+    return 0
+  fi
+  local out=""
+  local limit="$count"
+  if [[ "$count" -gt "$max" ]]; then
+    limit="$max"
+  fi
+  local i
+  for ((i=0; i<limit; i++)); do
+    if [[ -n "$out" ]]; then
+      out+=", "
+    fi
+    out+="${items[$i]}"
+  done
+  if [[ "$count" -gt "$max" ]]; then
+    out+="...(+$((count - max)))"
+  fi
+  printf '%s' "$out"
+}
+
 strip_quotes() {
   local s="$1"
   if [[ ${#s} -ge 2 ]]; then
@@ -956,6 +982,35 @@ if [[ -n "$manifest_project_name" && "$manifest_project_name" != "$PROJECT_NAME"
   die "Project mismatch (pack='$manifest_project_name', expected='$PROJECT_NAME')."
 fi
 
+pack_content_branches="$(read_manifest_value "$manifest" content_branches || true)"
+pack_content_tags="$(read_manifest_value "$manifest" content_tags || true)"
+if [[ -z "$pack_content_branches" ]]; then
+  pack_content_branches="all"
+fi
+if [[ "$pack_content_tags" != "0" ]]; then
+  pack_content_tags="1"
+fi
+PACK_TAGS_INCLUDED="$pack_content_tags"
+PACK_HAS_ALL_BRANCHES="1"
+if [[ "$pack_content_branches" != "all" ]]; then
+  PACK_HAS_ALL_BRANCHES="0"
+fi
+
+content_desc="branches"
+if [[ "$pack_content_branches" != "all" ]]; then
+  if [[ "$pack_content_branches" == *","* ]]; then
+    content_desc="branches ${pack_content_branches}"
+  else
+    content_desc="branch ${pack_content_branches}"
+  fi
+fi
+if [[ "$PACK_TAGS_INCLUDED" == "1" ]]; then
+  content_desc="${content_desc} + tags"
+else
+  content_desc="${content_desc} (no tags)"
+fi
+info "Content: $content_desc"
+
 expected_bundle_sha="$(read_manifest_value "$manifest" bundle_sha256 || true)"
 if [[ -n "${expected_bundle_sha:-}" ]]; then
   actual_bundle_sha="$(sha256_file "$bundle")"
@@ -982,6 +1037,13 @@ if [[ "$MODE" == "existing" ]]; then
     else
       die "Repository identity mismatch (pack=$expected_repo_roots_sha, local=$local_repo_roots_sha)."
     fi
+  fi
+  if [[ "$PACK_HAS_ALL_BRANCHES" == "0" ]]; then
+    if [[ "$PRUNE_REMOTE_REFS" == "1" || "$PRUNE_LOCAL_BRANCHES" == "1" ]]; then
+      warn "Partial pack: disabling prune of remote/local branches."
+    fi
+    PRUNE_REMOTE_REFS="0"
+    PRUNE_LOCAL_BRANCHES="0"
   fi
 else
   mkdir -p "$TARGET_REPO" || die "Cannot create target directory: $TARGET_REPO"
@@ -1017,22 +1079,37 @@ if [[ "$MODE" == "existing" ]]; then
     | awk '{print $1 "\t" $2}' | sort -u > "$local_tags"
 
   identical="1"
-  if ! cmp -s "$incoming_heads" "$local_heads"; then
-    identical="0"
-  elif ! cmp -s "$incoming_tags" "$local_tags"; then
-    identical="0"
-  fi
-
-  if [[ "$identical" == "1" ]]; then
-    awk -F'\t' '{print $1}' "$incoming_heads" > "$incoming_heads_list"
-    awk -F'\t' '{print $1}' "$incoming_tags" > "$incoming_tags_list"
-    awk -F'\t' '{print $1}' "$local_heads" > "$local_heads_list"
-    awk -F'\t' '{print $1}' "$local_tags" > "$local_tags_list"
-
-    if ! cmp -s "$incoming_heads_list" "$local_heads_list"; then
+  if [[ "$PACK_HAS_ALL_BRANCHES" == "1" ]]; then
+    if ! cmp -s "$incoming_heads" "$local_heads"; then
       identical="0"
-    elif ! cmp -s "$incoming_tags_list" "$local_tags_list"; then
+    elif [[ "$PACK_TAGS_INCLUDED" == "1" && ! -s "$incoming_tags" ]]; then
+      :
+    elif [[ "$PACK_TAGS_INCLUDED" == "1" && ! cmp -s "$incoming_tags" "$local_tags" ]]; then
       identical="0"
+    fi
+
+    if [[ "$identical" == "1" ]]; then
+      awk -F'\t' '{print $1}' "$incoming_heads" > "$incoming_heads_list"
+      awk -F'\t' '{print $1}' "$incoming_tags" > "$incoming_tags_list"
+      awk -F'\t' '{print $1}' "$local_heads" > "$local_heads_list"
+      awk -F'\t' '{print $1}' "$local_tags" > "$local_tags_list"
+
+      if ! cmp -s "$incoming_heads_list" "$local_heads_list"; then
+        identical="0"
+      elif [[ "$PACK_TAGS_INCLUDED" == "1" && ! cmp -s "$incoming_tags_list" "$local_tags_list" ]]; then
+        identical="0"
+      fi
+    fi
+  else
+    # Partial pack: compare only refs present in the pack.
+    if ! awk -F'\t' 'FNR==NR {m[$1]=$2; next} {if(!( $1 in m) || m[$1] != $2) {exit 1}}' \
+      "$local_heads" "$incoming_heads"; then
+      identical="0"
+    elif [[ "$PACK_TAGS_INCLUDED" == "1" ]]; then
+      if ! awk -F'\t' 'FNR==NR {m[$1]=$2; next} {if(!( $1 in m) || m[$1] != $2) {exit 1}}' \
+        "$local_tags" "$incoming_tags"; then
+        identical="0"
+      fi
     fi
   fi
 
@@ -1073,17 +1150,21 @@ local_tag_count="$(git -C "$REPO_DIR" show-ref --tags 2>/dev/null | wc -l | awk 
 [[ -n "${bundle_tag_count:-}" ]] || bundle_tag_count="unknown"
 [[ -n "${local_tag_count:-}" ]] || local_tag_count="unknown"
 info "Tags in bundle: $bundle_tag_count | local tags: $local_tag_count"
-if [[ "$FORCE_TAGS" == "1" ]]; then
-  info "Update tags (force)"
-  git -C "$REPO_DIR" fetch --force "$bundle" "refs/tags/*:refs/tags/*" >/dev/null 2>/dev/null || true
+if [[ "$PACK_TAGS_INCLUDED" == "1" ]]; then
+  if [[ "$FORCE_TAGS" == "1" ]]; then
+    info "Update tags (force)"
+    git -C "$REPO_DIR" fetch --force "$bundle" "refs/tags/*:refs/tags/*" >/dev/null 2>/dev/null || true
+  else
+    info "Update tags"
+    git -C "$REPO_DIR" fetch "$bundle" "refs/tags/*:refs/tags/*" >/dev/null 2>/dev/null || true
+  fi
+  info "Tags updated"
 else
-  info "Update tags"
-  git -C "$REPO_DIR" fetch "$bundle" "refs/tags/*:refs/tags/*" >/dev/null 2>/dev/null || true
+  info "Skip tags (not included in pack)"
 fi
-info "Tags updated"
 
 tag_conflicts=()
-if [[ "$FORCE_TAGS" == "0" || "$FF_ONLY" == "1" ]]; then
+if [[ "$PACK_TAGS_INCLUDED" == "1" && ( "$FORCE_TAGS" == "0" || "$FF_ONLY" == "1" ) ]]; then
   info "Check tag conflicts"
   local_tags="$tmp/local_tags.tsv"
   git -C "$REPO_DIR" show-ref --tags 2>/dev/null | tr -d '\r' > "$local_tags" || true
@@ -1134,6 +1215,15 @@ if [[ "${#branches[@]}" -eq 0 ]]; then
   exit 0
 fi
 info "Remote branches: ${#branches[@]}"
+
+local_heads_before="$tmp/local_heads_before.tsv"
+local_tags_before="$tmp/local_tags_before.tsv"
+git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2) %(objectname)' refs/heads | tr -d '\r' \
+  | awk '{print $1 "\t" $2}' > "$local_heads_before"
+if [[ "$PACK_TAGS_INCLUDED" == "1" ]]; then
+  git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2) %(objectname)' refs/tags | tr -d '\r' \
+    | awk '{print $1 "\t" $2}' > "$local_tags_before"
+fi
 
 current_branch="$(git -C "$REPO_DIR" symbolic-ref --short -q HEAD 2>/dev/null || true)"
 forced_updates=0
@@ -1239,6 +1329,58 @@ for b in "${branches[@]}"; do
   fi
 done
 info "Branch update done in $((SECONDS - update_start))s"
+
+local_heads_after="$tmp/local_heads_after.tsv"
+local_tags_after="$tmp/local_tags_after.tsv"
+git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2) %(objectname)' refs/heads | tr -d '\r' \
+  | awk '{print $1 "\t" $2}' > "$local_heads_after"
+if [[ "$PACK_TAGS_INCLUDED" == "1" ]]; then
+  git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2) %(objectname)' refs/tags | tr -d '\r' \
+    | awk '{print $1 "\t" $2}' > "$local_tags_after"
+fi
+
+declare -A before_map after_map
+while IFS=$'\t' read -r name sha; do
+  [[ -n "$name" ]] || continue
+  before_map["$name"]="$sha"
+done < "$local_heads_before"
+while IFS=$'\t' read -r name sha; do
+  [[ -n "$name" ]] || continue
+  after_map["$name"]="$sha"
+done < "$local_heads_after"
+
+updated_branches=()
+created_branches=()
+for b in "${branches[@]}"; do
+  old_sha="${before_map[$b]-}"
+  new_sha="${after_map[$b]-}"
+  if [[ -z "$old_sha" && -n "$new_sha" ]]; then
+    created_branches+=("$b")
+  elif [[ -n "$old_sha" && "$old_sha" != "$new_sha" ]]; then
+    updated_branches+=("$b")
+  fi
+done
+
+details_lines=()
+if [[ "${#updated_branches[@]}" -gt 0 ]]; then
+  details_lines+=("branches updated: $(format_list "${updated_branches[@]}")")
+fi
+if [[ "${#created_branches[@]}" -gt 0 ]]; then
+  details_lines+=("branches created: $(format_list "${created_branches[@]}")")
+fi
+if [[ "$PACK_TAGS_INCLUDED" == "1" && -f "$local_tags_before" && -f "$local_tags_after" ]]; then
+  tag_changes="$(awk -F'\t' 'FNR==NR {m[$1]=$2; next} {if(!( $1 in m) || m[$1] != $2) c++} END{print c+0}' \
+    "$local_tags_before" "$local_tags_after")"
+  if [[ "${tag_changes:-0}" -gt 0 ]]; then
+    details_lines+=("tags updated: $tag_changes")
+  fi
+fi
+
+if [[ -z "${ACK_NOTE:-}" || "$ACK_NOTE" == "UNPACKED" ]]; then
+  if [[ "${#details_lines[@]}" -gt 0 ]]; then
+    ACK_DETAILS="$(printf '%s\n' "${details_lines[@]}")"
+  fi
+fi
 
 if [[ "$FF_ONLY" == "0" && "$forced_updates" -gt 0 ]]; then
   warn "FORCED updates may discard local commits."
