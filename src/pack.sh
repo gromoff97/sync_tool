@@ -370,7 +370,35 @@ fetch_recent_remote_branches() {
 
   REMOTE_RECENT_BRANCHES=("${recent_branches[@]}")
   REMOTE_RECENT_COUNT="${#recent_branches[@]}"
-  log_git "Remote branches updated recently: $REMOTE_RECENT_COUNT (not applying to local heads)"
+
+  local current_branch
+  current_branch="$(git -C "$REPO_DIR" symbolic-ref --short -q HEAD 2>/dev/null || true)"
+
+  local updated=0 created=0
+  for b in "${recent_branches[@]}"; do
+    if ! git -C "$REPO_DIR" show-ref --verify --quiet "refs/remotes/$remote/$b"; then
+      continue
+    fi
+    if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
+      if ! git -C "$REPO_DIR" merge-base --is-ancestor "refs/heads/$b" "refs/remotes/$remote/$b"; then
+        die "Cannot update branch '$b' from '$remote/$b' (diverged)."
+      fi
+      if [[ -n "${current_branch:-}" && "$b" == "$current_branch" ]]; then
+        git -C "$REPO_DIR" merge --ff-only "$remote/$b" >/dev/null 2>&1 \
+          || die "Failed to fast-forward current branch '$b' from '$remote/$b'."
+      else
+        git -C "$REPO_DIR" update-ref "refs/heads/$b" "refs/remotes/$remote/$b" >/dev/null 2>&1 \
+          || die "Failed to fast-forward branch '$b' from '$remote/$b'."
+      fi
+      updated=$((updated + 1))
+    else
+      git -C "$REPO_DIR" branch "$b" "$remote/$b" >/dev/null 2>&1 \
+        || die "Failed to create branch '$b' from '$remote/$b'."
+      created=$((created + 1))
+    fi
+  done
+
+  log_git "Updated local branches from remote: $updated updated, $created created"
 }
 
 select_default_remote() {
@@ -896,8 +924,6 @@ WITH_TAGS=""
 UPDATE_REMOTE="0"
 REMOTE_NAME=""
 RECENT_DAYS="180"
-REMOTE_RECENT_BRANCHES=()
-REMOTE_RECENT_COUNT="0"
 
 want_push_help="0"
 want_help="0"
@@ -978,6 +1004,10 @@ if [[ -n "$RECENT_DAYS" && ! "$RECENT_DAYS" =~ ^[0-9]+$ ]]; then
   die "--recent-days must be an integer"
 fi
 
+if [[ "$MPROTO_LOGIN" != "1" && "$LIST_CHATS" != "1" ]]; then
+  ensure_repo_ok_and_clean "$REPO_DIR"
+fi
+
 if [[ "$MPROTO_LOGIN" == "1" ]]; then
   TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
   if [[ -f "$TELEGRAM_CONFIG_FILE" && -s "$TELEGRAM_CONFIG_FILE" ]]; then
@@ -1022,7 +1052,6 @@ mkdir -p "$OUTPUT_DIR" || die "Cannot create --output-dir: $OUTPUT_DIR"
 if is_within_repo "$REPO_DIR" "$OUTPUT_DIR"; then
   die "Refusing to write packs inside the repository. Use --output-dir outside repo."
 fi
-ensure_repo_ok_and_clean "$REPO_DIR"
 log_pack "Repo: $REPO_DIR | Project: $PROJECT_NAME"
 log_pack "Out: $OUTPUT_DIR"
 
@@ -1067,9 +1096,6 @@ fi
 if [[ "$WITH_TAGS" == "1" ]]; then
   content_desc="${content_desc} + tags"
 fi
-if [[ "$UPDATE_REMOTE" == "1" && "${REMOTE_RECENT_COUNT:-0}" -gt 0 ]]; then
-  content_desc="${content_desc} + remote refs ${REMOTE_NAME} (${REMOTE_RECENT_COUNT})"
-fi
 log_pack "Content: $content_desc"
 
 tmp="$(mktemp_dir)"
@@ -1104,11 +1130,6 @@ fi
 if [[ "$WITH_TAGS" == "1" ]]; then
   bundle_args+=(--tags)
 fi
-if [[ "$UPDATE_REMOTE" == "1" && "${REMOTE_RECENT_COUNT:-0}" -gt 0 ]]; then
-  for b in "${REMOTE_RECENT_BRANCHES[@]}"; do
-    bundle_args+=("refs/remotes/$REMOTE_NAME/$b")
-  done
-fi
 if ! git -C "$REPO_DIR" bundle create "$bundle" "${bundle_args[@]}" >"$create_out" 2>&1; then
   cat "$create_out" >&2
   die "git bundle create failed"
@@ -1135,13 +1156,6 @@ bundle_sha_short="${bundle_sha:0:12}"
   echo -e "bundle_sha256\t$bundle_sha"
   echo -e "content_branches\t$content_branches"
   echo -e "content_tags\t$WITH_TAGS"
-  echo -e "content_remote_name\t${REMOTE_NAME:-}"
-  echo -e "content_remote_days\t${RECENT_DAYS:-}"
-  if [[ "$UPDATE_REMOTE" == "1" && "${REMOTE_RECENT_COUNT:-0}" -gt 0 ]]; then
-    echo -e "content_remote_branches\t$(IFS=','; printf '%s' "${REMOTE_RECENT_BRANCHES[*]}")"
-  else
-    echo -e "content_remote_branches\t"
-  fi
   echo -e "branches_count\t$(git -C "$REPO_DIR" show-ref --heads | wc -l | awk '{print $1}')"
   if [[ "$WITH_TAGS" == "1" ]]; then
     echo -e "tags_count\t$(git -C "$REPO_DIR" show-ref --tags 2>/dev/null | wc -l | awk '{print $1}')"
