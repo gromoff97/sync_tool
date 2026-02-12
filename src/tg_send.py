@@ -850,6 +850,7 @@ def main() -> int:
                 rf"^{re.escape(args.pack_prefix)}_{re.escape(args.project_name)}_([0-9]{{8}}_[0-9]{{6}})\.tgz$"
             )
             ack_text = (args.ack_text or "Unpacked by").strip()
+            ack_prefixes = [ack_text, "Closed by"]
             ack_reply_ids = set()
 
             best_msg = None
@@ -858,10 +859,11 @@ def main() -> int:
             scanned = 0
             for msg in client.iter_messages(entity, limit=args.scan_limit):
                 scanned += 1
-                if msg and msg.message and ack_text and msg.message.startswith(ack_text):
-                    if getattr(msg, "reply_to_msg_id", None):
-                        ack_reply_ids.add(msg.reply_to_msg_id)
-                    continue
+                if msg and msg.message:
+                    if any(msg.message.startswith(p) for p in ack_prefixes if p):
+                        if getattr(msg, "reply_to_msg_id", None):
+                            ack_reply_ids.add(msg.reply_to_msg_id)
+                        continue
                 if not msg or not msg.file:
                     continue
                 name = getattr(msg.file, "name", "") or ""
@@ -948,18 +950,19 @@ def main() -> int:
                 err("--require-ack requires --pack-prefix and --project-name")
                 return 3
             ack_text = (args.ack_text or "Unpacked by").strip()
+            ack_prefixes = [ack_text, "Closed by"]
             if args.last_message_id:
                 ack_found = False
                 for msg in client.iter_messages(resolved_to_peer, limit=args.scan_limit):
                     if not msg or not msg.message:
                         continue
-                    if not ack_text or not msg.message.startswith(ack_text):
+                    if not any(msg.message.startswith(p) for p in ack_prefixes if p):
                         continue
                     if getattr(msg, "reply_to_msg_id", None) == args.last_message_id:
                         ack_found = True
                         break
                 if not ack_found:
-                    err("Previous pack not acknowledged yet. Wait for 'Unpacked by ...' reply.")
+                    err("Previous pack not acknowledged yet. Wait for 'Unpacked by ...' or 'Closed by ...' reply.")
                     return 4
             else:
                 pattern = re.compile(
@@ -969,10 +972,11 @@ def main() -> int:
                 latest_pack_ts = ""
                 ack_reply_ids = set()
                 for msg in client.iter_messages(resolved_to_peer, limit=args.scan_limit):
-                    if msg and msg.message and ack_text and msg.message.startswith(ack_text):
-                        if getattr(msg, "reply_to_msg_id", None):
-                            ack_reply_ids.add(msg.reply_to_msg_id)
-                        continue
+                    if msg and msg.message:
+                        if any(msg.message.startswith(p) for p in ack_prefixes if p):
+                            if getattr(msg, "reply_to_msg_id", None):
+                                ack_reply_ids.add(msg.reply_to_msg_id)
+                            continue
                     if not msg or not msg.file:
                         continue
                     name = getattr(msg.file, "name", "") or ""
@@ -985,7 +989,7 @@ def main() -> int:
                         latest_pack = msg
 
                 if latest_pack and latest_pack.id not in ack_reply_ids:
-                    err("Previous pack not acknowledged yet. Wait for 'Unpacked by ...' reply.")
+                    err("Previous pack not acknowledged yet. Wait for 'Unpacked by ...' or 'Closed by ...' reply.")
                     return 4
 
         if args.text:

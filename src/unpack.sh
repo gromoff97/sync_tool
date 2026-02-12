@@ -740,10 +740,14 @@ META_FILE="$tmp/pull_meta.txt"
 send_ack_message() {
   [[ "$PULL_MODE" == "1" ]] || return 0
   [[ -n "$TG_FROM" && -n "$PULL_MSG_ID" ]] || return 0
-  local text="Unpacked by *$MACHINE_NAME*"
-  if [[ "${ACK_NOTE:-}" == "NO_CHANGES" ]]; then
-    text="$text (no changes)"
-  fi
+  local prefix="Unpacked by"
+  local suffix=""
+  case "${ACK_NOTE:-}" in
+    NO_CHANGES) suffix=" (no changes)" ;;
+    DIVERGED) prefix="Closed by"; suffix=" (diverged)" ;;
+    FAILED) prefix="Closed by"; suffix=" (failed)" ;;
+  esac
+  local text="${prefix} *$MACHINE_NAME*${suffix}"
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -1118,6 +1122,17 @@ if [[ "$FF_ONLY" == "1" ]]; then
     for i in "${!diverged[@]}"; do
       warn "  ${diverged[$i]} -> ${diverged_status[$i]}"
     done
+    if [[ "$PULL_MODE" == "1" && -t 0 ]]; then
+      read -r -p "Send close message to allow next pack? [y/N] " _close_ans
+      case "${_close_ans:-}" in
+        y|Y|yes|YES)
+          ACK_NOTE="DIVERGED"
+          send_ack_message
+          PULL_SKIP_ACK="1"
+          PULL_SKIP_FAILLOG="1"
+          ;;
+      esac
+    fi
     die "Resolve manually (merge/rebase), or use --ff-only 0 (dangerous)."
   fi
 fi

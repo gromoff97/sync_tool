@@ -569,7 +569,6 @@ Options (same as pack):
   --pack-prefix PREFIX     default: syncpack
   --machine-name NAME      default: auto-detected; written to manifest only
   --dry-run                show what would be done without creating/sending
-  --force-push             send even if previous pack was not acknowledged
   --help
 
 Config:
@@ -645,7 +644,6 @@ SEND_TO_TELEGRAM="0"
 MPROTO_LOGIN="0"
 LIST_CHATS="0"
 LIST_CHAT_FILTER=""
-FORCE_PUSH="0"
 OTHER_OPTS_USED="0"
 TG_API_ID=""
 TG_API_HASH=""
@@ -687,7 +685,6 @@ while [[ $# -gt 0 ]]; do
     --list-chats)      LIST_CHATS="1"; LIST_CHAT_FILTER=""; shift 1;;
     --list-chat)       LIST_CHATS="1"; LIST_CHAT_FILTER="${2:-}"; shift 2;;
     --list-chat=*)     LIST_CHATS="1"; LIST_CHAT_FILTER="${1#*=}"; shift 1;;
-    --force-push)      FORCE_PUSH="1"; shift 1;;
     --help|-h)         usage_main;;
     *) die "Unknown option: $1 (use --help)";;
   esac
@@ -840,10 +837,6 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
   TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
   load_telegram_config "$TELEGRAM_CONFIG_FILE"
   require_telegram_config "$TELEGRAM_CONFIG_FILE"
-  if [[ "$FORCE_PUSH" == "1" ]]; then
-    log_pack "Force push: skipping ack check."
-    TG_ACK_REQUIRED="0"
-  fi
   if looks_like_placeholder "$TG_TO"; then
     TG_TO=""
   fi
