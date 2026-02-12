@@ -740,7 +740,10 @@ META_FILE="$tmp/pull_meta.txt"
 send_ack_message() {
   [[ "$PULL_MODE" == "1" ]] || return 0
   [[ -n "$TG_FROM" && -n "$PULL_MSG_ID" ]] || return 0
-  local text="Unpacked by $MACHINE_NAME"
+  local text="Unpacked by *$MACHINE_NAME*"
+  if [[ "${ACK_NOTE:-}" == "NO_CHANGES" ]]; then
+    text="$text (no changes)"
+  fi
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -763,6 +766,7 @@ send_ack_message() {
     --text "$text"
     --reply-to "$PULL_MSG_ID"
     --non-interactive
+    --parse-mode md
   )
   if [[ -n "$TG_PROXY" ]]; then
     cmd+=(--proxy "$TG_PROXY")
@@ -1012,6 +1016,7 @@ if [[ "$MODE" == "existing" ]]; then
 
   if [[ "$identical" == "1" ]]; then
     info "No changes: repo matches pack."
+    ACK_NOTE="NO_CHANGES"
     cleanup_peer_refs
     if ! rm -f -- "$PACK_FILE"; then
       warn "Matched, but failed to delete pack: $PACK_FILE"

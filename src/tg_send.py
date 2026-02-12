@@ -48,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mtproto-test", dest="mproto_login", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--list-chats", action="store_true", help="List available chats with peer_id/access_hash")
     parser.add_argument("--chat-filter", default="", help="Filter for list-chats (substring match)")
+    parser.add_argument("--parse-mode", default="", help="Force parse mode (e.g. md)")
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values")
     return parser.parse_args()
 
@@ -988,12 +989,14 @@ def main() -> int:
                     return 4
 
         if args.text:
+            parse_mode = args.parse_mode or "md"
             run_wait_step(
                 "Send message",
                 lambda: client.send_message(
                     resolved_to_peer,
                     args.text,
                     reply_to=args.reply_to or None,
+                    parse_mode=parse_mode,
                 ),
             )
             py("Message sent.")
