@@ -195,7 +195,7 @@ load_config_overrides() {
       with_tags|WITH_TAGS)         WITH_TAGS="$value" ;;
       update_remote|UPDATE_REMOTE) UPDATE_REMOTE="$value" ;;
       remote|REMOTE)               REMOTE_NAME="$value" ;;
-      recent_months|RECENT_MONTHS) RECENT_MONTHS="$value" ;;
+      recent_days|RECENT_DAYS)     RECENT_DAYS="$value" ;;
       *) ;;
     esac
   done < "$cfg"
@@ -323,23 +323,17 @@ python_candidates_from_globs() {
   shopt -u nullglob
 }
 
-compute_cutoff_epoch() {
-  local months="$1"
+compute_cutoff_epoch_days() {
+  local days="$1"
   local cutoff=""
-  if date -d "now - ${months} months" +%s >/dev/null 2>&1; then
-    cutoff="$(date -d "now - ${months} months" +%s)"
+  if date -d "now - ${days} days" +%s >/dev/null 2>&1; then
+    cutoff="$(date -d "now - ${days} days" +%s)"
   elif have python; then
-    cutoff="$(python - <<'PY' "$months"
+    cutoff="$(python - <<'PY' "$days"
 import sys, datetime
-months=int(sys.argv[1])
+days=int(sys.argv[1])
 now=datetime.datetime.utcnow()
-year=now.year
-month=now.month-months
-while month<=0:
-    month+=12
-    year-=1
-day=min(now.day, 28)
-cut=datetime.datetime(year, month, day, now.hour, now.minute, now.second)
+cut=now - datetime.timedelta(days=days)
 print(int(cut.timestamp()))
 PY
 )"
@@ -351,14 +345,14 @@ PY
 
 fetch_recent_remote_branches() {
   local remote="$1"
-  local months="$2"
+  local days="$2"
   [[ -n "$remote" ]] || die "--remote is required with -u"
-  [[ -n "$months" ]] || months="3"
-  log_git "Fetch remote: $remote (recent ${months} months)"
+  [[ -n "$days" ]] || days="180"
+  log_git "Fetch remote: $remote (recent ${days} days)"
   git -C "$REPO_DIR" fetch --prune "$remote" >/dev/null 2>&1 || die "Failed to fetch remote '$remote'"
 
   local cutoff
-  cutoff="$(compute_cutoff_epoch "$months")"
+  cutoff="$(compute_cutoff_epoch_days "$days")"
   [[ -n "$cutoff" ]] || die "Failed to compute recent cutoff."
 
   mapfile -t recent_branches < <(
@@ -368,7 +362,7 @@ fetch_recent_remote_branches() {
   )
 
   if [[ "${#recent_branches[@]}" -eq 0 ]]; then
-    die "No remote branches updated in the last ${months} months."
+    die "No remote branches updated in the last ${days} days."
   fi
 
   for b in "${recent_branches[@]}"; do
@@ -651,7 +645,7 @@ Options:
   --machine-name NAME      default: auto-detected; written to manifest only
   -u, --update-remote      fetch recent branches from remote before pack
   --remote NAME            remote name (default: origin; required with -u)
-  --recent-months N        how many months back is "recent" (default: 6)
+  --recent-days N          how many days back is "recent" (default: 180)
   --branch NAME            pack only this branch (no tags by default)
   --branches LIST          pack only these branches (comma-separated)
   --with-tags 0|1          include tags (default: 1 for all branches, 0 for selected branches)
@@ -683,7 +677,7 @@ Options (same as pack):
   --machine-name NAME      default: auto-detected; written to manifest only
   -u, --update-remote      fetch recent branches from remote before pack
   --remote NAME            remote name (default: origin; required with -u)
-  --recent-months N        how many months back is "recent" (default: 6)
+  --recent-days N          how many days back is "recent" (default: 180)
   --branch NAME            pack only this branch (no tags by default)
   --branches LIST          pack only these branches (comma-separated)
   --with-tags 0|1          include tags (default: 1 for all branches, 0 for selected branches)
@@ -911,7 +905,7 @@ BRANCHES_RAW=""
 WITH_TAGS=""
 UPDATE_REMOTE="0"
 REMOTE_NAME=""
-RECENT_MONTHS="6"
+RECENT_DAYS="180"
 
 want_push_help="0"
 want_help="0"
@@ -942,8 +936,8 @@ while [[ $# -gt 0 ]]; do
     -u|--update-remote) UPDATE_REMOTE="1"; OTHER_OPTS_USED="1"; shift 1;;
     --remote)          REMOTE_NAME="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
     --remote=*)        REMOTE_NAME="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
-    --recent-months)   RECENT_MONTHS="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
-    --recent-months=*) RECENT_MONTHS="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
+    --recent-days)     RECENT_DAYS="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
+    --recent-days=*)   RECENT_DAYS="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     --branch)          BRANCHES_RAW="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
     --branch=*)        BRANCHES_RAW="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     --branches)        BRANCHES_RAW="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
@@ -988,8 +982,8 @@ fi
 if [[ -n "$UPDATE_REMOTE" && "$UPDATE_REMOTE" != "0" && "$UPDATE_REMOTE" != "1" ]]; then
   die "update_remote must be 0|1"
 fi
-if [[ -n "$RECENT_MONTHS" && ! "$RECENT_MONTHS" =~ ^[0-9]+$ ]]; then
-  die "--recent-months must be an integer"
+if [[ -n "$RECENT_DAYS" && ! "$RECENT_DAYS" =~ ^[0-9]+$ ]]; then
+  die "--recent-days must be an integer"
 fi
 
 if [[ "$MPROTO_LOGIN" == "1" ]]; then
@@ -1029,7 +1023,7 @@ if [[ "$UPDATE_REMOTE" == "1" ]]; then
     REMOTE_NAME="origin"
   fi
   [[ -z "$BRANCHES_RAW" ]] || die "-u cannot be combined with --branch/--branches"
-  fetch_recent_remote_branches "$REMOTE_NAME" "$RECENT_MONTHS"
+  fetch_recent_remote_branches "$REMOTE_NAME" "$RECENT_DAYS"
 fi
 
 mkdir -p "$OUTPUT_DIR" || die "Cannot create --output-dir: $OUTPUT_DIR"
