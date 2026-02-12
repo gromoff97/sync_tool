@@ -1098,15 +1098,26 @@ forced_updates=0
 
 if [[ "$FF_ONLY" == "1" ]]; then
   diverged=()
+  diverged_status=()
   for b in "${branches[@]}"; do
     if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
       if ! git -C "$REPO_DIR" merge-base --is-ancestor "$b" "$PEER/$b"; then
         diverged+=("$b")
+        if git -C "$REPO_DIR" merge-base --is-ancestor "$PEER/$b" "$b"; then
+          diverged_status+=("pack older than local")
+        elif git -C "$REPO_DIR" merge-base --is-ancestor "$b" "$PEER/$b"; then
+          diverged_status+=("pack newer than local")
+        else
+          diverged_status+=("histories diverged")
+        fi
       fi
     fi
   done
   if [[ "${#diverged[@]}" -gt 0 ]]; then
-    warn "DIVERGED branches (fast-forward impossible): ${diverged[*]}"
+    warn "DIVERGED branches (fast-forward impossible):"
+    for i in "${!diverged[@]}"; do
+      warn "  ${diverged[$i]} -> ${diverged_status[$i]}"
+    done
     die "Resolve manually (merge/rebase), or use --ff-only 0 (dangerous)."
   fi
 fi
