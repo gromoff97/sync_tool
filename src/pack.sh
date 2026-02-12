@@ -1209,7 +1209,7 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
   fi
   [[ -n "$TG_TO" ]] || die "telegram_to is required. Set it in telegram.conf or enter it interactively."
   if [[ -z "$TG_CAPTION" ]]; then
-    TG_CAPTION="Packed by **$(escape_md "$MACHINE_NAME")**"$'\n'"project: $(escape_md "$PROJECT_NAME")"$'\n'"content: $(escape_md "$content_desc")"
+    TG_CAPTION="Packed by **$(escape_md "$MACHINE_NAME")**"$'\n'"project: $PROJECT_NAME"$'\n'"content: $(escape_md "$content_desc")"
   fi
 
   log_pack "Telegram send..."
