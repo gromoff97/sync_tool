@@ -1150,7 +1150,7 @@ if [[ "$MODE" == "existing" ]]; then
 
       if ! cmp -s "$incoming_heads_list" "$local_heads_list"; then
         identical="0"
-      elif [[ "$PACK_TAGS_INCLUDED" == "1" && ! cmp -s "$incoming_tags_list" "$local_tags_list" ]]; then
+      elif [[ "$PACK_TAGS_INCLUDED" == "1" ]] && ! cmp -s "$incoming_tags_list" "$local_tags_list"; then
         identical="0"
       elif [[ "$PACK_HAS_REMOTE" == "1" ]]; then
         incoming_remote_list="$tmp/incoming_remote_list.txt"
