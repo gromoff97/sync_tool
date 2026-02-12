@@ -363,10 +363,15 @@ fetch_recent_remote_branches() {
 
   if [[ "${#recent_branches[@]}" -eq 0 ]]; then
     log_git "No remote branches updated in the last ${days} days."
+    REMOTE_RECENT_BRANCHES=()
+    REMOTE_RECENT_COUNT="0"
     return 0
   fi
 
-  log_git "Update recent branches: ${#recent_branches[@]}"
+  REMOTE_RECENT_BRANCHES=("${recent_branches[@]}")
+  REMOTE_RECENT_COUNT="${#recent_branches[@]}"
+  log_git "Remote branches updated recently: $REMOTE_RECENT_COUNT"
+
   for b in "${recent_branches[@]}"; do
     if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
       if git -C "$REPO_DIR" merge-base --is-ancestor "$b" "$remote/$b"; then
@@ -907,6 +912,8 @@ WITH_TAGS=""
 UPDATE_REMOTE="0"
 REMOTE_NAME=""
 RECENT_DAYS="180"
+REMOTE_RECENT_BRANCHES=()
+REMOTE_RECENT_COUNT="0"
 
 want_push_help="0"
 want_help="0"
@@ -1076,6 +1083,9 @@ fi
 if [[ "$WITH_TAGS" == "1" ]]; then
   content_desc="${content_desc} + tags"
 fi
+if [[ "$UPDATE_REMOTE" == "1" && "${REMOTE_RECENT_COUNT:-0}" -gt 0 ]]; then
+  content_desc="${content_desc} + remotes ${REMOTE_NAME} (${REMOTE_RECENT_COUNT})"
+fi
 log_pack "Content: $content_desc"
 
 tmp="$(mktemp_dir)"
@@ -1110,6 +1120,11 @@ fi
 if [[ "$WITH_TAGS" == "1" ]]; then
   bundle_args+=(--tags)
 fi
+if [[ "$UPDATE_REMOTE" == "1" && "${REMOTE_RECENT_COUNT:-0}" -gt 0 ]]; then
+  for b in "${REMOTE_RECENT_BRANCHES[@]}"; do
+    bundle_args+=("refs/remotes/$REMOTE_NAME/$b")
+  done
+fi
 if ! git -C "$REPO_DIR" bundle create "$bundle" "${bundle_args[@]}" >"$create_out" 2>&1; then
   cat "$create_out" >&2
   die "git bundle create failed"
@@ -1136,6 +1151,13 @@ bundle_sha_short="${bundle_sha:0:12}"
   echo -e "bundle_sha256\t$bundle_sha"
   echo -e "content_branches\t$content_branches"
   echo -e "content_tags\t$WITH_TAGS"
+  echo -e "content_remote_name\t${REMOTE_NAME:-}"
+  echo -e "content_remote_days\t${RECENT_DAYS:-}"
+  if [[ "$UPDATE_REMOTE" == "1" && "${REMOTE_RECENT_COUNT:-0}" -gt 0 ]]; then
+    echo -e "content_remote_branches\t$(IFS=','; printf '%s' "${REMOTE_RECENT_BRANCHES[*]}")"
+  else
+    echo -e "content_remote_branches\t"
+  fi
   echo -e "branches_count\t$(git -C "$REPO_DIR" show-ref --heads | wc -l | awk '{print $1}')"
   if [[ "$WITH_TAGS" == "1" ]]; then
     echo -e "tags_count\t$(git -C "$REPO_DIR" show-ref --tags 2>/dev/null | wc -l | awk '{print $1}')"
