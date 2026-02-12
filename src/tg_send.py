@@ -264,7 +264,7 @@ def make_upload_progress_logger(
     def suffix() -> str:
         with lock:
             if not started:
-                return f" | waiting for {phase_label}..."
+                return f" | waiting for {phase_label}... {render_progress_bar(0)} 0%"
             sent_text = format_bytes(sent_bytes)
             total_text = format_bytes(total_bytes)
             pct = max(0, min(100, progress_percent))
