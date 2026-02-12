@@ -750,11 +750,7 @@ send_ack_message() {
     UNPACKED) suffix=" (unpacked)" ;;
     *) suffix=" (${reason})" ;;
   esac
-  local sha_suffix=""
-  if [[ -n "${ACK_SHA_SHORT:-}" ]]; then
-    sha_suffix=" sha:${ACK_SHA_SHORT}"
-  fi
-  local text="${prefix} *$MACHINE_NAME*${suffix}${sha_suffix}"
+  local text="${prefix} **$MACHINE_NAME**${suffix}"
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -941,11 +937,9 @@ if [[ -n "$manifest_project_name" && "$manifest_project_name" != "$PROJECT_NAME"
   die "Project mismatch (pack='$manifest_project_name', expected='$PROJECT_NAME')."
 fi
 
-ACK_SHA_SHORT=""
 expected_bundle_sha="$(read_manifest_value "$manifest" bundle_sha256 || true)"
 if [[ -n "${expected_bundle_sha:-}" ]]; then
   actual_bundle_sha="$(sha256_file "$bundle")"
-  ACK_SHA_SHORT="${expected_bundle_sha:0:12}"
   info "Bundle SHA256: pack=$expected_bundle_sha local=$actual_bundle_sha"
   [[ "$actual_bundle_sha" == "$expected_bundle_sha" ]] || die "Bundle SHA256 mismatch (corrupted transfer?)"
 else
