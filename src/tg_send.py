@@ -38,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project-name", default="")
     parser.add_argument("--path-file", default="")
     parser.add_argument("--meta-file", default="")
+    parser.add_argument("--no-tmp-rename", action="store_true", help="Write download directly to final file")
     parser.add_argument("--scan-limit", type=int, default=200)
     parser.add_argument("--require-ack", action="store_true")
     parser.add_argument("--ack-text", default="Closed by")
@@ -299,6 +300,7 @@ def download_file_with_timeout(
     client: object,
     message: object,
     dest_path: str,
+    final_path: str,
     progress_callback: Callable[[int, int], None],
 ) -> object:
     async def _download() -> object:
@@ -308,7 +310,10 @@ def download_file_with_timeout(
             progress_callback=progress_callback,
         )
 
-    return client.loop.run_until_complete(_download())
+    result = client.loop.run_until_complete(_download())
+    if dest_path != final_path:
+        os.replace(dest_path, final_path)
+    return result
 
 
 def looks_like_placeholder(value: str) -> bool:
@@ -990,7 +995,9 @@ def main() -> int:
             os.makedirs(args.pack_dir, exist_ok=True)
             dest_path = os.path.join(args.pack_dir, best_name)
             tmp_path = dest_path + ".part"
-            if os.path.exists(tmp_path):
+            if args.no_tmp_rename:
+                tmp_path = dest_path
+            elif os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
                 except OSError:
@@ -1008,11 +1015,11 @@ def main() -> int:
                     client=client,
                     message=best_msg,
                     dest_path=tmp_path,
+                    final_path=dest_path,
                     progress_callback=progress_cb,
                 ),
                 status_suffix=progress_suffix,
             )
-            os.replace(tmp_path, dest_path)
             py(f"Downloaded: {dest_path}")
             if args.path_file:
                 with open(args.path_file, "w", encoding="utf-8") as fh:

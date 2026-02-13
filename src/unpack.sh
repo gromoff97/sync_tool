@@ -495,6 +495,7 @@ download_pack_from_telegram() {
     --machine-name "$machine_name"
     --ack-text "$ack_text"
     --meta-file "$meta_file"
+    --no-tmp-rename
   )
   if [[ -n "$TG_PROXY" ]]; then
     cmd+=(--proxy "$TG_PROXY")
