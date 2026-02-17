@@ -114,6 +114,8 @@ USE_256_COLOR = USE_COLOR and supports_256_color()
 T = TypeVar("T")
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 LIVE_STATUS_ENABLED = sys.stdout.isatty()
+if os.getenv("FORCE_LIVE_STATUS") not in (None, "", "0"):
+    LIVE_STATUS_ENABLED = True
 _LIVE_STATUS_LOCK = threading.Lock()
 _LIVE_STATUS_ACTIVE = False
 _LIVE_STATUS_WIDTH = 0
@@ -210,9 +212,9 @@ def run_wait_step(step_label: str, action: Callable[[], T], status_suffix: Optio
             update_live_status(f"{step_label}... {elapsed}s{status_suffix()}")
 
     if LIVE_STATUS_ENABLED:
-        update_live_status(f"{step_label}... 0s")
+        update_live_status(f"{step_label}... 0s{status_suffix()}")
     else:
-        py(f"{step_label}...")
+        py(f"{step_label}... 0s{status_suffix()}")
     worker = None
     if LIVE_STATUS_ENABLED:
         worker = threading.Thread(target=ticker, daemon=True)

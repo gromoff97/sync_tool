@@ -519,9 +519,9 @@ download_pack_from_telegram() {
   if [[ -z "$C_RESET" ]]; then
     NO_COLOR=1 "${cmd[@]}"
   elif [[ "$USE_256_COLOR" == "1" ]]; then
-    FORCE_COLOR=1 FORCE_256_COLOR=1 "${cmd[@]}"
+    FORCE_COLOR=1 FORCE_256_COLOR=1 FORCE_LIVE_STATUS=1 "${cmd[@]}"
   else
-    FORCE_COLOR=1 "${cmd[@]}"
+    FORCE_COLOR=1 FORCE_LIVE_STATUS=1 "${cmd[@]}"
   fi
 
   if [[ -n "$meta_file" && -f "$meta_file" ]]; then
@@ -1580,5 +1580,8 @@ fi
 if [[ "$MODE" == "bootstrap" ]]; then
   info "Created repo: $REPO_DIR | branches: ${#branches[@]} | peer: $PEER"
 else
-  info "Updated branches: ${#branches[@]} | peer: $PEER"
+  updated_count="${#updated_branches[@]}"
+  created_count="${#created_branches[@]}"
+  changed_count=$((updated_count + created_count))
+  info "Branch changes: $changed_count (updated: $updated_count, created: $created_count) | peer: $PEER"
 fi
