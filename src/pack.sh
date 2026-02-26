@@ -672,7 +672,7 @@ Options:
   --machine-name NAME      default: auto-detected; written to manifest only
   -u, --update-remote      fetch recent branches from remote before pack (pack all branches)
   --remote NAME            remote name (default: origin; required with -u)
-  --recent-days N          how many days back is "recent" (default: 180)
+  --recent-days N          how many days back is "recent" (default: 30)
   --branch NAME            pack only this branch (no tags by default)
   --branches LIST          pack only these branches (comma-separated)
   --with-tags 0|1          include tags (default: 1 for all branches, 0 for selected branches)
@@ -704,7 +704,7 @@ Options (same as pack):
   --machine-name NAME      default: auto-detected; written to manifest only
   -u, --update-remote      fetch recent branches from remote before pack (pack all branches)
   --remote NAME            remote name (default: origin; required with -u)
-  --recent-days N          how many days back is "recent" (default: 180)
+  --recent-days N          how many days back is "recent" (default: 30)
   --branch NAME            pack only this branch (no tags by default)
   --branches LIST          pack only these branches (comma-separated)
   --with-tags 0|1          include tags (default: 1 for all branches, 0 for selected branches)
@@ -932,7 +932,7 @@ BRANCHES_RAW=""
 WITH_TAGS=""
 UPDATE_REMOTE="0"
 REMOTE_NAME=""
-RECENT_DAYS="180"
+RECENT_DAYS="30"
 
 want_push_help="0"
 want_help="0"
