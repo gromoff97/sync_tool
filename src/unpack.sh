@@ -538,6 +538,9 @@ download_pack_from_telegram() {
   PACK_FILE_OVERRIDE="$(tr -d '\r' < "$path_file")"
   [[ -n "$PACK_FILE_OVERRIDE" ]] || die "Telegram download completed but pack path is empty."
   PACK_FILE_OVERRIDE="$(to_posix_path "$PACK_FILE_OVERRIDE")"
+  if [[ -f "$PACK_FILE_OVERRIDE" ]]; then
+    PACK_DOWNLOADED="1"
+  fi
 }
 
 gitpath() { git -C "$1" rev-parse --git-path "$2"; }
@@ -721,6 +724,7 @@ require_tools
 
 PACK_DIR="${HOME:+$HOME/syncpacks}"
 PACK_DIR_POSIX=""
+DEFAULT_PACK_DIR="${HOME:+$HOME/syncpacks}"
 PACK_PREFIX="syncpack"
 PACK_FILE_OVERRIDE=""
 PULL_MSG_ID=""
@@ -730,6 +734,7 @@ META_FILE=""
 PULL_ALREADY_ACKED="0"
 PULL_SKIP_ACK="0"
 PULL_SKIP_FAILLOG="0"
+PACK_DOWNLOADED="0"
 DRY_RUN="0"
 PULL_MODE="0"
 
@@ -930,11 +935,41 @@ send_failure_log() {
   "${cmd[@]}" >/dev/null 2>&1 || true
 }
 
+save_failed_pack() {
+  local src="$1"
+  [[ -f "$src" ]] || return 0
+  local dest_dir="${DEFAULT_PACK_DIR:-}"
+  if [[ -z "$dest_dir" ]]; then
+    warn "Cannot save failed pack: HOME is not set."
+    return 0
+  fi
+  dest_dir="$(to_posix_path "$dest_dir")"
+  mkdir -p "$dest_dir" 2>/dev/null || {
+    warn "Cannot create syncpacks dir: $dest_dir"
+    return 0
+  }
+  local base dest
+  base="$(basename "$src")"
+  dest="$dest_dir/$base"
+  if [[ "$src" == "$dest" ]]; then
+    info "Failed pack already in syncpacks: $dest"
+    return 0
+  fi
+  if cp -f "$src" "$dest" 2>/dev/null; then
+    info "Saved failed pack to syncpacks: $dest"
+  else
+    warn "Failed to save pack to syncpacks: $dest"
+  fi
+}
+
 cleanup() {
   local exit_code=$?
   if [[ "$exit_code" -ne 0 ]]; then
     if [[ "$PULL_SKIP_FAILLOG" != "1" ]]; then
       send_failure_log
+    fi
+    if [[ "$PULL_MODE" == "1" && "$PACK_DOWNLOADED" == "1" && -n "${PACK_FILE:-}" ]]; then
+      save_failed_pack "$PACK_FILE"
     fi
   else
     if [[ "$PULL_SKIP_ACK" != "1" ]]; then

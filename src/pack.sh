@@ -382,6 +382,23 @@ fetch_recent_remote_branches() {
   local current_branch
   current_branch="$(git -C "$REPO_DIR" symbolic-ref --short -q HEAD 2>/dev/null || true)"
 
+  local diverged=()
+  for b in "${recent_branches[@]}"; do
+    if ! git -C "$REPO_DIR" show-ref --verify --quiet "refs/remotes/$remote/$b"; then
+      continue
+    fi
+    if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$b"; then
+      if ! git -C "$REPO_DIR" merge-base --is-ancestor "refs/heads/$b" "refs/remotes/$remote/$b"; then
+        diverged+=("$b")
+      fi
+    fi
+  done
+  if [[ "${#diverged[@]}" -gt 0 ]]; then
+    err_line "$C_ERR" "ERR" "Diverged branches: ${diverged[*]}"
+    err_line "$C_ERR" "ERR" "Run: git branch -D ${diverged[*]}"
+    die "Cannot update branches from '$remote' (diverged)."
+  fi
+
   local updated=0 created=0
   for b in "${recent_branches[@]}"; do
     if ! git -C "$REPO_DIR" show-ref --verify --quiet "refs/remotes/$remote/$b"; then
