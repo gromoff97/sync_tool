@@ -1,7 +1,6 @@
 [pack]
-output_dir = "C:/Users/USERNAME/syncpacks"
+output_dir = "~/syncpacks"
 pack_prefix = "syncpack"
-machine_name = ""
 remote_name = "origin"
 ## absent => no update
 ## -1     => update only existing local branches
@@ -12,9 +11,8 @@ remote_name = "origin"
 to = "https://t.me/your-destination"
 
 [unpack]
-pack_dir = "C:/Users/USERNAME/syncpacks"
+pack_dir = "~/syncpacks"
 pack_prefix = "syncpack"
-project_name = ""
 peer = "sync"
 ff_only = true
 force_tags = false
@@ -29,11 +27,8 @@ from = "https://t.me/your-source"
 api_id = 123456
 api_hash = "replace_me"
 session = "C:/Users/USERNAME/.sync_tool_telegram"
-session_string = ""
-phone = "+70000000000"
 ack_scan_limit = 32
-caption = ""
-python_min = "3.8"
+# local_machine_name = "MY-WORKSTATION"
 
 # Choose at most one proxy block.
 #

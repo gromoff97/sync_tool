@@ -45,25 +45,19 @@ python -c "import telethon, colorama, pyaes, rsa, pyasn1; print('ok')"
 
 ## Configuration
 
-The tool now uses one required root config file:
+The tool now uses one required global config file in the `sync_tool` directory:
 
 - `conf.toml` for live settings
 - `conf.example.toml` as a full template
 
-`conf.toml` is expected in the target project root:
-
-- for `pack*`, that means the current Git repository top-level
-- for `unpack*`, that means the current Git repository top-level if you are inside one, otherwise the current directory
-
-`conf.toml` is intentionally ignored by Git through `.gitignore`.
+All setup commands rewrite this global file. Runtime CLI flags can override it for one invocation without mutating it.
 
 ## Config Layout
 
 ```toml
 [pack]
-output_dir = "C:/Users/USERNAME/syncpacks"
+output_dir = "~/syncpacks"
 pack_prefix = "syncpack"
-machine_name = ""
 remote_name = "origin"
 # update = -1
 
@@ -71,9 +65,8 @@ remote_name = "origin"
 to = "https://t.me/your-destination"
 
 [unpack]
-pack_dir = "C:/Users/USERNAME/syncpacks"
+pack_dir = "~/syncpacks"
 pack_prefix = "syncpack"
-project_name = ""
 peer = "sync"
 ff_only = true
 force_tags = false
@@ -88,11 +81,8 @@ from = "https://t.me/your-source"
 api_id = 123456
 api_hash = "replace_me"
 session = "C:/Users/USERNAME/.sync_tool_telegram"
-session_string = ""
-phone = "+70000000000"
 ack_scan_limit = 32
-caption = ""
-python_min = "3.8"
+# local_machine_name = "MY-WORKSTATION"
 ```
 
 Proxy is optional. If you use it, define at most one of these blocks:
@@ -124,7 +114,7 @@ If no `telegram.common.proxy.*` section exists, Telegram works without a proxy.
 
 ## Setup Commands
 
-Interactive setup updates only the relevant TOML section and rewrites `conf.toml` atomically.
+Interactive setup updates only the relevant TOML section in the global `conf.toml` and rewrites that file atomically.
 
 ```bash
 ./pack setup
@@ -141,6 +131,8 @@ What each one edits:
 - `./unpack take setup` -> `[unpack.take.telegram]`
 
 Common Telegram settings and proxy settings are edited manually in `conf.toml`.
+
+Setup prompts always use built-in defaults, not the current file values. Literal defaults are shown in `[]`, and every prompt includes a short description in `()`.
 
 ## Doctor Commands
 
@@ -204,6 +196,12 @@ Examples:
 - `./pack --update 14` overrides `[pack].update`
 - `./unpack --peer mirror` overrides `[unpack].peer`
 
+For `unpack take` outside an existing repository, `--project-name` is required:
+
+```bash
+./unpack --project-name demo take
+```
+
 Important `pack --update` behavior:
 
 - if `[pack].update` is absent, no remote update happens
@@ -215,5 +213,5 @@ Important `pack --update` behavior:
 - `conf.toml` is missing: run the relevant setup command first.
 - Telegram auth is missing or expired: update `[telegram.common]` manually and rerun a `doctor` command.
 - Proxy config is invalid: keep at most one `telegram.common.proxy.*` block.
-- `pack doctor` fails on a dirty repository: commit or stash everything except `conf.toml` / `conf.example.toml`.
+- `pack doctor` fails on a dirty repository: commit or stash everything except the global `conf.toml` / `conf.example.toml` in `sync_tool`.
 - `pack send` or `unpack take` on Windows cannot find proxy support: install `python-socks` from `offline/python_wheels`.

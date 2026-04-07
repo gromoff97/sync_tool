@@ -22,7 +22,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-id", default="")
     parser.add_argument("--api-hash", default="")
     parser.add_argument("--session", default="")
-    parser.add_argument("--session-string", default="")
     parser.add_argument("--to", default="", help="Username, phone, user ID, or Saved Messages")
     parser.add_argument("--from", dest="from_peer", default="", help="Source chat/user for pull")
     parser.add_argument("--file", default="")
@@ -595,19 +594,18 @@ def main() -> int:
     if session_dir:
         os.makedirs(session_dir, exist_ok=True)
 
-    def _import_telethon() -> Tuple[object, object, object, object, object]:
+    def _import_telethon() -> Tuple[object, object, object, object]:
         from telethon import connection
         from telethon.errors import FloodWaitError
         try:
             from telethon.errors import ProxyConnectionError as _ProxyConnectionError
         except Exception:
             _ProxyConnectionError = ConnectionError
-        from telethon.sessions import StringSession
         from telethon.sync import TelegramClient
-        return FloodWaitError, _ProxyConnectionError, StringSession, TelegramClient, connection
+        return FloodWaitError, _ProxyConnectionError, TelegramClient, connection
 
     try:
-        FloodWaitError, ProxyConnectionError, StringSession, TelegramClient, telethon_connection = _import_telethon()
+        FloodWaitError, ProxyConnectionError, TelegramClient, telethon_connection = _import_telethon()
     except Exception as exc:
         # Retry once with user site explicitly enabled (Store Python can disable it).
         try:
@@ -615,7 +613,7 @@ def main() -> int:
             user_site = _site.getusersitepackages()
             if user_site and user_site not in sys.path:
                 sys.path.append(user_site)
-            FloodWaitError, ProxyConnectionError, StringSession, TelegramClient, telethon_connection = _import_telethon()
+            FloodWaitError, ProxyConnectionError, TelegramClient, telethon_connection = _import_telethon()
         except Exception as exc2:
             err(f"telethon import failed: {type(exc2).__name__}: {exc2}")
             err(f"sys.executable: {sys.executable}")
@@ -672,7 +670,6 @@ def main() -> int:
         _err_detail(f"  to: {args.to or 'unset'}")
         _err_detail(f"  from: {args.from_peer or 'unset'}")
         _err_detail(f"  session: {os.path.expanduser(args.session or '~/.sync_tool_telegram')}")
-        _err_detail(f"  session_string: {'set' if (args.session_string or '').strip() else 'unset'}")
         if proxy_mode == "socks5":
             _err_detail("  proxy mode: socks5")
             _err_detail(f"  proxy: socks5://{socks5_host}:{socks5_port}")
@@ -781,13 +778,7 @@ def main() -> int:
         err(str(exc))
         return 3
 
-    session_string = (args.session_string or "").strip()
-    if looks_like_placeholder(session_string):
-        session_string = ""
-
     session_obj = session
-    if session_string:
-        session_obj = StringSession(session_string)
 
     client_kwargs = {
         "request_retries": 0,

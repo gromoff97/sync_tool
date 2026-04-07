@@ -27,7 +27,7 @@ load_conf_export() {
   local cwd git_top output
   cwd="$(pwd)"
   git_top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-  output="$("${CONFIG_PY[@]}" "$root_helper" export --command "$scope" --cwd "$cwd" --git-top-level "$git_top")" \
+  output="$("${CONFIG_PY[@]}" "$root_helper" export --command "$scope" --cwd "$cwd" --git-top-level "$git_top" --tool-root "$script_dir")" \
     || die "Failed to read conf.toml for scope '$scope'."
   eval "$output"
 }
@@ -39,33 +39,43 @@ update_table() {
 }
 
 prompt_default() {
-  local label="$1" default_value="${2:-}" response=""
+  local prompt="$1" default_value="${2:-}" response=""
   if [[ -n "$default_value" ]]; then
-    read -r -p "$label [$default_value]: " response
+    read -r -p "$prompt [$default_value]: " response
     printf '%s' "${response:-$default_value}"
   else
-    read -r -p "$label: " response
+    read -r -p "$prompt: " response
     printf '%s' "$response"
   fi
 }
 
 prompt_bool() {
-  local label="$1" default_value="${2:-false}" response=""
-  local hint="y/N"
-  if [[ "$default_value" == "true" ]]; then
-    hint="Y/n"
-  fi
-  read -r -p "$label [$hint]: " response
+  local prompt="$1" default_value="$2" response=""
+  read -r -p "$prompt [$default_value]: " response
   response="${response,,}"
   if [[ -z "$response" ]]; then
     printf '%s' "$default_value"
     return 0
   fi
   case "$response" in
-    y|yes|true|1) printf '%s' "true" ;;
-    n|no|false|0) printf '%s' "false" ;;
-    *) die "Expected yes/no response for '$label'." ;;
+    true|yes|y|1) printf '%s' "true" ;;
+    false|no|n|0) printf '%s' "false" ;;
+    *) die "Invalid boolean value for $prompt. Use true/false, yes/no, y/n, or 1/0." ;;
   esac
+}
+
+prompt_update() {
+  local prompt="$1" response=""
+  read -r -p "$prompt: " response
+  if [[ -z "$response" ]]; then
+    printf '%s' ""
+    return 0
+  fi
+  if [[ "$response" == "-1" || "$response" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s' "$response"
+    return 0
+  fi
+  die "Invalid pack.update value. Use -1, a positive integer, or leave it empty."
 }
 
 ensure_conf_exists() {
@@ -85,7 +95,7 @@ Usage:
   pack [pack options] send [send options] doctor
 
 Configuration:
-  Uses root conf.toml.
+  Uses the global conf.toml in the sync_tool directory.
   Pack settings live in [pack].
   Telegram target for send lives in [pack.send.telegram].
   Shared Telegram auth/proxy lives in [telegram.common].
@@ -113,11 +123,8 @@ Send options:
   --api-id ID
   --api-hash HASH
   --session PATH
-  --session-string STRING
   --to PEER
   --ack-scan-limit N
-  --caption TEXT
-  --python-min VERSION
   --proxy-type none|socks5|http|mtproto
   --socks5-host HOST --socks5-port PORT [--socks5-user USER] [--socks5-password PASS]
   --http-host HOST --http-port PORT [--http-user USER] [--http-password PASS]
@@ -140,7 +147,7 @@ Usage:
   pack [pack options] send [send options] doctor
 
 Configuration:
-  Uses root conf.toml.
+  Uses the global conf.toml in the sync_tool directory.
   Pack settings live in [pack].
   Telegram target for send lives in [pack.send.telegram].
   Shared Telegram auth/proxy lives in [telegram.common].
@@ -160,11 +167,8 @@ Send options:
   --api-id ID
   --api-hash HASH
   --session PATH
-  --session-string STRING
   --to PEER
   --ack-scan-limit N
-  --caption TEXT
-  --python-min VERSION
   --proxy-type none|socks5|http|mtproto
   --socks5-host HOST --socks5-port PORT [--socks5-user USER] [--socks5-password PASS]
   --http-host HOST --http-port PORT [--http-user USER] [--http-password PASS]
@@ -176,7 +180,7 @@ build_pack_args() {
   PACK_ARGS=()
   [[ -n "${CFG_PACK_OUTPUT_DIR:-}" ]] && PACK_ARGS+=(--output-dir "$CFG_PACK_OUTPUT_DIR")
   [[ -n "${CFG_PACK_PACK_PREFIX:-}" ]] && PACK_ARGS+=(--pack-prefix "$CFG_PACK_PACK_PREFIX")
-  [[ -n "${CFG_PACK_MACHINE_NAME:-}" ]] && PACK_ARGS+=(--machine-name "$CFG_PACK_MACHINE_NAME")
+  [[ -n "${CFG_TELEGRAM_COMMON_LOCAL_MACHINE_NAME:-}" ]] && PACK_ARGS+=(--machine-name "$CFG_TELEGRAM_COMMON_LOCAL_MACHINE_NAME")
   [[ -n "${CFG_PACK_REMOTE_NAME:-}" ]] && PACK_ARGS+=(--remote "$CFG_PACK_REMOTE_NAME")
   if [[ -n "${CFG_PACK_UPDATE:-}" ]]; then
     PACK_ARGS+=(--update "$CFG_PACK_UPDATE")
@@ -219,11 +223,8 @@ append_pack_send_telegram_args() {
   [[ -n "${CFG_TELEGRAM_COMMON_API_ID:-}" ]] && _args_ref+=(--api-id "$CFG_TELEGRAM_COMMON_API_ID")
   [[ -n "${CFG_TELEGRAM_COMMON_API_HASH:-}" ]] && _args_ref+=(--api-hash "$CFG_TELEGRAM_COMMON_API_HASH")
   [[ -n "${CFG_TELEGRAM_COMMON_SESSION:-}" ]] && _args_ref+=(--session "$CFG_TELEGRAM_COMMON_SESSION")
-  [[ -n "${CFG_TELEGRAM_COMMON_SESSION_STRING:-}" ]] && _args_ref+=(--session-string "$CFG_TELEGRAM_COMMON_SESSION_STRING")
   [[ -n "${CFG_PACK_SEND_TELEGRAM_TO:-}" ]] && _args_ref+=(--to "$CFG_PACK_SEND_TELEGRAM_TO")
   [[ -n "${CFG_TELEGRAM_COMMON_ACK_SCAN_LIMIT:-}" ]] && _args_ref+=(--ack-scan-limit "$CFG_TELEGRAM_COMMON_ACK_SCAN_LIMIT")
-  [[ -n "${CFG_TELEGRAM_COMMON_CAPTION:-}" ]] && _args_ref+=(--caption "$CFG_TELEGRAM_COMMON_CAPTION")
-  [[ -n "${CFG_TELEGRAM_COMMON_PYTHON_MIN:-}" ]] && _args_ref+=(--python-min "$CFG_TELEGRAM_COMMON_PYTHON_MIN")
   _args_ref+=(--proxy-type "${CFG_TELEGRAM_PROXY_MODE:-none}")
   case "${CFG_TELEGRAM_PROXY_MODE:-none}" in
     socks5)
@@ -259,9 +260,7 @@ validate_pack_send_config() {
   [[ -n "${CFG_PACK_SEND_TELEGRAM_TO:-}" ]] || die "[pack.send.telegram].to is required in conf.toml. Run: pack send setup"
   [[ -n "${CFG_TELEGRAM_COMMON_API_ID:-}" ]] || die "[telegram.common].api_id is required in conf.toml."
   [[ -n "${CFG_TELEGRAM_COMMON_API_HASH:-}" ]] || die "[telegram.common].api_hash is required in conf.toml."
-  if [[ -z "${CFG_TELEGRAM_COMMON_SESSION:-}" && -z "${CFG_TELEGRAM_COMMON_SESSION_STRING:-}" ]]; then
-    die "Either [telegram.common].session or [telegram.common].session_string is required in conf.toml."
-  fi
+  [[ -n "${CFG_TELEGRAM_COMMON_SESSION:-}" ]] || die "[telegram.common].session is required in conf.toml."
 }
 
 apply_pack_cli_overrides() {
@@ -278,8 +277,8 @@ apply_pack_cli_overrides() {
       --output-dir=*) CFG_PACK_OUTPUT_DIR="${arg#*=}"; i=$((i + 1));;
       --pack-prefix) CFG_PACK_PACK_PREFIX="$next"; i=$((i + 2));;
       --pack-prefix=*) CFG_PACK_PACK_PREFIX="${arg#*=}"; i=$((i + 1));;
-      --machine-name) CFG_PACK_MACHINE_NAME="$next"; i=$((i + 2));;
-      --machine-name=*) CFG_PACK_MACHINE_NAME="${arg#*=}"; i=$((i + 1));;
+      --machine-name) CFG_TELEGRAM_COMMON_LOCAL_MACHINE_NAME="$next"; i=$((i + 2));;
+      --machine-name=*) CFG_TELEGRAM_COMMON_LOCAL_MACHINE_NAME="${arg#*=}"; i=$((i + 1));;
       --update) CFG_PACK_UPDATE="$next"; i=$((i + 2));;
       --update=*) CFG_PACK_UPDATE="${arg#*=}"; i=$((i + 1));;
       --remote) CFG_PACK_REMOTE_NAME="$next"; i=$((i + 2));;
@@ -305,16 +304,10 @@ apply_pack_send_cli_overrides() {
       --api-hash=*) CFG_TELEGRAM_COMMON_API_HASH="${arg#*=}"; i=$((i + 1));;
       --session) CFG_TELEGRAM_COMMON_SESSION="$next"; i=$((i + 2));;
       --session=*) CFG_TELEGRAM_COMMON_SESSION="${arg#*=}"; i=$((i + 1));;
-      --session-string) CFG_TELEGRAM_COMMON_SESSION_STRING="$next"; i=$((i + 2));;
-      --session-string=*) CFG_TELEGRAM_COMMON_SESSION_STRING="${arg#*=}"; i=$((i + 1));;
       --to) CFG_PACK_SEND_TELEGRAM_TO="$next"; i=$((i + 2));;
       --to=*) CFG_PACK_SEND_TELEGRAM_TO="${arg#*=}"; i=$((i + 1));;
       --ack-scan-limit) CFG_TELEGRAM_COMMON_ACK_SCAN_LIMIT="$next"; i=$((i + 2));;
       --ack-scan-limit=*) CFG_TELEGRAM_COMMON_ACK_SCAN_LIMIT="${arg#*=}"; i=$((i + 1));;
-      --caption) CFG_TELEGRAM_COMMON_CAPTION="$next"; i=$((i + 2));;
-      --caption=*) CFG_TELEGRAM_COMMON_CAPTION="${arg#*=}"; i=$((i + 1));;
-      --python-min) CFG_TELEGRAM_COMMON_PYTHON_MIN="$next"; i=$((i + 2));;
-      --python-min=*) CFG_TELEGRAM_COMMON_PYTHON_MIN="${arg#*=}"; i=$((i + 1));;
       --proxy-type)
         CFG_TELEGRAM_PROXY_MODE="$next"
         CFG_TELEGRAM_PROXY_HOST=""
@@ -362,17 +355,16 @@ apply_pack_send_cli_overrides() {
 
 run_pack_setup() {
   load_conf_export "pack-setup"
-  local output_dir pack_prefix machine_name update_value remote_name
-  output_dir="$(prompt_default "pack.output_dir" "${CFG_PACK_OUTPUT_DIR:-$HOME/syncpacks}")"
+  local output_dir pack_prefix update_value remote_name
+  output_dir="$(prompt_default "pack.output_dir (where created packs are stored)" "~/syncpacks")"
   [[ -n "$output_dir" ]] || die "pack.output_dir cannot be empty."
-  pack_prefix="$(prompt_default "pack.pack_prefix" "${CFG_PACK_PACK_PREFIX:-syncpack}")"
+  pack_prefix="$(prompt_default "pack.pack_prefix (filename prefix for created archives)" "syncpack")"
   [[ -n "$pack_prefix" ]] || die "pack.pack_prefix cannot be empty."
-  machine_name="$(prompt_default "pack.machine_name" "${CFG_PACK_MACHINE_NAME:-}")"
-  update_value="$(prompt_default "pack.update (-1 for local branches only, positive integer for recent branches, empty to disable)" "${CFG_PACK_UPDATE:-}")"
-  remote_name="$(prompt_default "pack.remote_name" "${CFG_PACK_REMOTE_NAME:-origin}")"
+  remote_name="$(prompt_default "pack.remote_name (git remote used by update)" "origin")"
+  update_value="$(prompt_update "pack.update (leave empty to disable; -1 updates only local branches; positive integer includes recent remote branches)")"
 
   local -a set_args
-  set_args=(--set "output_dir=$output_dir" --set "pack_prefix=$pack_prefix" --set "machine_name=$machine_name")
+  set_args=(--set "output_dir=$output_dir" --set "pack_prefix=$pack_prefix")
   [[ -n "$update_value" ]] && set_args+=(--set "update=$update_value")
   [[ -n "$remote_name" ]] && set_args+=(--set "remote_name=$remote_name")
   update_table "${CFG_CONFIG_FILE}" "pack" "${set_args[@]}"
@@ -382,7 +374,7 @@ run_pack_setup() {
 run_pack_send_setup() {
   load_conf_export "pack-send-setup"
   local to_value
-  to_value="$(prompt_default "pack.send.telegram.to" "${CFG_PACK_SEND_TELEGRAM_TO:-}")"
+  to_value="$(prompt_default "pack.send.telegram.to (Telegram destination chat for sent packs)")"
   [[ -n "$to_value" ]] || die "pack.send.telegram.to cannot be empty."
   update_table "${CFG_CONFIG_FILE}" "pack.send.telegram" --set "to=$to_value"
   printf '[APP] Updated %s [pack.send.telegram]\n' "$CFG_CONFIG_FILE"
@@ -505,7 +497,7 @@ consume_pack_zone_token() {
       PACK_ZONE_ARGS+=("$token")
       PACK_PARSE_CONSUMED=1
       ;;
-    --api-id|--api-id=*|--api-hash|--api-hash=*|--session|--session=*|--session-string|--session-string=*|--to|--to=*|--ack-scan-limit|--ack-scan-limit=*|--caption|--caption=*|--python-min|--python-min=*|--proxy-type|--proxy-type=*|--socks5-host|--socks5-host=*|--socks5-port|--socks5-port=*|--socks5-user|--socks5-user=*|--socks5-password|--socks5-password=*|--http-host|--http-host=*|--http-port|--http-port=*|--http-user|--http-user=*|--http-password|--http-password=*|--mtproto-host|--mtproto-host=*|--mtproto-port|--mtproto-port=*|--mtproto-secret|--mtproto-secret=*)
+    --api-id|--api-id=*|--api-hash|--api-hash=*|--session|--session=*|--to|--to=*|--ack-scan-limit|--ack-scan-limit=*|--proxy-type|--proxy-type=*|--socks5-host|--socks5-host=*|--socks5-port|--socks5-port=*|--socks5-user|--socks5-user=*|--socks5-password|--socks5-password=*|--http-host|--http-host=*|--http-port|--http-port=*|--http-user|--http-user=*|--http-password|--http-password=*|--mtproto-host|--mtproto-host=*|--mtproto-port|--mtproto-port=*|--mtproto-secret|--mtproto-secret=*)
       die "$(option_name "$token") is only valid for 'pack send'"
       ;;
     --*|-*)
@@ -520,12 +512,12 @@ consume_pack_zone_token() {
 consume_send_zone_token() {
   local token="$1" next="${2:-}"
   case "$token" in
-    --api-id|--api-hash|--session|--session-string|--to|--ack-scan-limit|--caption|--python-min|--proxy-type|--socks5-host|--socks5-port|--socks5-user|--socks5-password|--http-host|--http-port|--http-user|--http-password|--mtproto-host|--mtproto-port|--mtproto-secret)
+    --api-id|--api-hash|--session|--to|--ack-scan-limit|--proxy-type|--socks5-host|--socks5-port|--socks5-user|--socks5-password|--http-host|--http-port|--http-user|--http-password|--mtproto-host|--mtproto-port|--mtproto-secret)
       [[ -n "$next" ]] || die "Missing value for $token"
       SEND_ZONE_ARGS+=("$token" "$next")
       PACK_PARSE_CONSUMED=2
       ;;
-    --api-id=*|--api-hash=*|--session=*|--session-string=*|--to=*|--ack-scan-limit=*|--caption=*|--python-min=*|--proxy-type=*|--socks5-host=*|--socks5-port=*|--socks5-user=*|--socks5-password=*|--http-host=*|--http-port=*|--http-user=*|--http-password=*|--mtproto-host=*|--mtproto-port=*|--mtproto-secret=*)
+    --api-id=*|--api-hash=*|--session=*|--to=*|--ack-scan-limit=*|--proxy-type=*|--socks5-host=*|--socks5-port=*|--socks5-user=*|--socks5-password=*|--http-host=*|--http-port=*|--http-user=*|--http-password=*|--mtproto-host=*|--mtproto-port=*|--mtproto-secret=*)
       SEND_ZONE_ARGS+=("$token")
       PACK_PARSE_CONSUMED=1
       ;;

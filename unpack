@@ -27,7 +27,7 @@ load_conf_export() {
   local cwd git_top output
   cwd="$(pwd)"
   git_top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-  output="$("${CONFIG_PY[@]}" "$root_helper" export --command "$scope" --cwd "$cwd" --git-top-level "$git_top")" \
+  output="$("${CONFIG_PY[@]}" "$root_helper" export --command "$scope" --cwd "$cwd" --git-top-level "$git_top" --tool-root "$script_dir")" \
     || die "Failed to read conf.toml for scope '$scope'."
   eval "$output"
 }
@@ -39,32 +39,28 @@ update_table() {
 }
 
 prompt_default() {
-  local label="$1" default_value="${2:-}" response=""
+  local prompt="$1" default_value="${2:-}" response=""
   if [[ -n "$default_value" ]]; then
-    read -r -p "$label [$default_value]: " response
+    read -r -p "$prompt [$default_value]: " response
     printf '%s' "${response:-$default_value}"
   else
-    read -r -p "$label: " response
+    read -r -p "$prompt: " response
     printf '%s' "$response"
   fi
 }
 
 prompt_bool() {
-  local label="$1" default_value="${2:-false}" response=""
-  local hint="y/N"
-  if [[ "$default_value" == "true" ]]; then
-    hint="Y/n"
-  fi
-  read -r -p "$label [$hint]: " response
+  local prompt="$1" default_value="$2" response=""
+  read -r -p "$prompt [$default_value]: " response
   response="${response,,}"
   if [[ -z "$response" ]]; then
     printf '%s' "$default_value"
     return 0
   fi
   case "$response" in
-    y|yes|true|1) printf '%s' "true" ;;
-    n|no|false|0) printf '%s' "false" ;;
-    *) die "Expected yes/no response for '$label'." ;;
+    true|yes|y|1) printf '%s' "true" ;;
+    false|no|n|0) printf '%s' "false" ;;
+    *) die "Invalid boolean value for $prompt. Use true/false, yes/no, y/n, or 1/0." ;;
   esac
 }
 
@@ -85,7 +81,7 @@ Usage:
   unpack [unpack options] take [take options] doctor
 
 Configuration:
-  Uses root conf.toml.
+  Uses the global conf.toml in the sync_tool directory.
   Unpack settings live in [unpack].
   Telegram source for take lives in [unpack.take.telegram].
   Shared Telegram auth/proxy lives in [telegram.common].
@@ -103,6 +99,7 @@ Unpack options:
   --pack-file PATH
   --pack-prefix PREFIX
   --project-name NAME
+  --machine-name NAME
   --peer NAME
   --ff-only 0|1
   --force-tags 0|1
@@ -115,9 +112,7 @@ Take options:
   --api-id ID
   --api-hash HASH
   --session PATH
-  --session-string STRING
   --from PEER
-  --python-min VERSION
   --proxy-type none|socks5|http|mtproto
 
 Notes:
@@ -137,7 +132,7 @@ Usage:
   unpack [unpack options] take [take options] doctor
 
 Configuration:
-  Uses root conf.toml.
+  Uses the global conf.toml in the sync_tool directory.
   Unpack settings live in [unpack].
   Telegram source for take lives in [unpack.take.telegram].
   Shared Telegram auth/proxy lives in [telegram.common].
@@ -147,6 +142,7 @@ Unpack options:
   --pack-file PATH
   --pack-prefix PREFIX
   --project-name NAME
+  --machine-name NAME
   --peer NAME
   --ff-only 0|1
   --force-tags 0|1
@@ -159,9 +155,7 @@ Take options:
   --api-id ID
   --api-hash HASH
   --session PATH
-  --session-string STRING
   --from PEER
-  --python-min VERSION
   --proxy-type none|socks5|http|mtproto
   --socks5-host HOST --socks5-port PORT [--socks5-user USER] [--socks5-password PASS]
   --http-host HOST --http-port PORT [--http-user USER] [--http-password PASS]
@@ -174,6 +168,7 @@ build_unpack_args() {
   [[ -n "${CFG_UNPACK_PACK_DIR:-}" ]] && UNPACK_ARGS+=(--pack-dir "$CFG_UNPACK_PACK_DIR")
   [[ -n "${CFG_UNPACK_PACK_PREFIX:-}" ]] && UNPACK_ARGS+=(--pack-prefix "$CFG_UNPACK_PACK_PREFIX")
   [[ -n "${CFG_UNPACK_PROJECT_NAME:-}" ]] && UNPACK_ARGS+=(--project-name "$CFG_UNPACK_PROJECT_NAME")
+  [[ -n "${CFG_TELEGRAM_COMMON_LOCAL_MACHINE_NAME:-}" ]] && UNPACK_ARGS+=(--machine-name "$CFG_TELEGRAM_COMMON_LOCAL_MACHINE_NAME")
   [[ -n "${CFG_UNPACK_PEER:-}" ]] && UNPACK_ARGS+=(--peer "$CFG_UNPACK_PEER")
   [[ -n "${CFG_UNPACK_FF_ONLY:-}" ]] && UNPACK_ARGS+=(--ff-only "$CFG_UNPACK_FF_ONLY")
   [[ -n "${CFG_UNPACK_FORCE_TAGS:-}" ]] && UNPACK_ARGS+=(--force-tags "$CFG_UNPACK_FORCE_TAGS")
@@ -218,9 +213,7 @@ append_unpack_take_telegram_args() {
   [[ -n "${CFG_TELEGRAM_COMMON_API_ID:-}" ]] && _args_ref+=(--api-id "$CFG_TELEGRAM_COMMON_API_ID")
   [[ -n "${CFG_TELEGRAM_COMMON_API_HASH:-}" ]] && _args_ref+=(--api-hash "$CFG_TELEGRAM_COMMON_API_HASH")
   [[ -n "${CFG_TELEGRAM_COMMON_SESSION:-}" ]] && _args_ref+=(--session "$CFG_TELEGRAM_COMMON_SESSION")
-  [[ -n "${CFG_TELEGRAM_COMMON_SESSION_STRING:-}" ]] && _args_ref+=(--session-string "$CFG_TELEGRAM_COMMON_SESSION_STRING")
   [[ -n "${CFG_UNPACK_TAKE_TELEGRAM_FROM:-}" ]] && _args_ref+=(--from "$CFG_UNPACK_TAKE_TELEGRAM_FROM")
-  [[ -n "${CFG_TELEGRAM_COMMON_PYTHON_MIN:-}" ]] && _args_ref+=(--python-min "$CFG_TELEGRAM_COMMON_PYTHON_MIN")
   _args_ref+=(--proxy-type "${CFG_TELEGRAM_PROXY_MODE:-none}")
   case "${CFG_TELEGRAM_PROXY_MODE:-none}" in
     socks5)
@@ -251,9 +244,7 @@ validate_unpack_take_config() {
   [[ -n "${CFG_UNPACK_TAKE_TELEGRAM_FROM:-}" ]] || die "[unpack.take.telegram].from is required in conf.toml. Run: unpack take setup"
   [[ -n "${CFG_TELEGRAM_COMMON_API_ID:-}" ]] || die "[telegram.common].api_id is required in conf.toml."
   [[ -n "${CFG_TELEGRAM_COMMON_API_HASH:-}" ]] || die "[telegram.common].api_hash is required in conf.toml."
-  if [[ -z "${CFG_TELEGRAM_COMMON_SESSION:-}" && -z "${CFG_TELEGRAM_COMMON_SESSION_STRING:-}" ]]; then
-    die "Either [telegram.common].session or [telegram.common].session_string is required in conf.toml."
-  fi
+  [[ -n "${CFG_TELEGRAM_COMMON_SESSION:-}" ]] || die "[telegram.common].session is required in conf.toml."
 }
 
 apply_unpack_cli_overrides() {
@@ -272,6 +263,8 @@ apply_unpack_cli_overrides() {
       --pack-prefix=*) CFG_UNPACK_PACK_PREFIX="${arg#*=}"; i=$((i + 1));;
       --project-name) CFG_UNPACK_PROJECT_NAME="$next"; i=$((i + 2));;
       --project-name=*) CFG_UNPACK_PROJECT_NAME="${arg#*=}"; i=$((i + 1));;
+      --machine-name) CFG_TELEGRAM_COMMON_LOCAL_MACHINE_NAME="$next"; i=$((i + 2));;
+      --machine-name=*) CFG_TELEGRAM_COMMON_LOCAL_MACHINE_NAME="${arg#*=}"; i=$((i + 1));;
       --peer) CFG_UNPACK_PEER="$next"; i=$((i + 2));;
       --peer=*) CFG_UNPACK_PEER="${arg#*=}"; i=$((i + 1));;
       *) i=$((i + 1));;
@@ -295,12 +288,8 @@ apply_unpack_take_cli_overrides() {
       --api-hash=*) CFG_TELEGRAM_COMMON_API_HASH="${arg#*=}"; i=$((i + 1));;
       --session) CFG_TELEGRAM_COMMON_SESSION="$next"; i=$((i + 2));;
       --session=*) CFG_TELEGRAM_COMMON_SESSION="${arg#*=}"; i=$((i + 1));;
-      --session-string) CFG_TELEGRAM_COMMON_SESSION_STRING="$next"; i=$((i + 2));;
-      --session-string=*) CFG_TELEGRAM_COMMON_SESSION_STRING="${arg#*=}"; i=$((i + 1));;
       --from) CFG_UNPACK_TAKE_TELEGRAM_FROM="$next"; i=$((i + 2));;
       --from=*) CFG_UNPACK_TAKE_TELEGRAM_FROM="${arg#*=}"; i=$((i + 1));;
-      --python-min) CFG_TELEGRAM_COMMON_PYTHON_MIN="$next"; i=$((i + 2));;
-      --python-min=*) CFG_TELEGRAM_COMMON_PYTHON_MIN="${arg#*=}"; i=$((i + 1));;
       --proxy-type)
         CFG_TELEGRAM_PROXY_MODE="$next"
         CFG_TELEGRAM_PROXY_HOST=""
@@ -348,25 +337,23 @@ apply_unpack_take_cli_overrides() {
 
 run_unpack_setup() {
   load_conf_export "unpack-setup"
-  local pack_dir pack_prefix project_name peer ff_only force_tags prune_remote_refs prune_local_branches clean_peer_refs
-  pack_dir="$(prompt_default "unpack.pack_dir" "${CFG_UNPACK_PACK_DIR:-$HOME/syncpacks}")"
+  local pack_dir pack_prefix peer ff_only force_tags prune_remote_refs prune_local_branches clean_peer_refs
+  pack_dir="$(prompt_default "unpack.pack_dir (where pack archives are searched or downloaded)" "~/syncpacks")"
   [[ -n "$pack_dir" ]] || die "unpack.pack_dir cannot be empty."
-  pack_prefix="$(prompt_default "unpack.pack_prefix" "${CFG_UNPACK_PACK_PREFIX:-syncpack}")"
+  pack_prefix="$(prompt_default "unpack.pack_prefix (filename prefix expected for incoming archives)" "syncpack")"
   [[ -n "$pack_prefix" ]] || die "unpack.pack_prefix cannot be empty."
-  project_name="$(prompt_default "unpack.project_name" "${CFG_UNPACK_PROJECT_NAME:-}")"
-  peer="$(prompt_default "unpack.peer" "${CFG_UNPACK_PEER:-sync}")"
+  peer="$(prompt_default "unpack.peer (remote name used for imported refs)" "sync")"
   [[ -n "$peer" ]] || die "unpack.peer cannot be empty."
-  ff_only="$(prompt_bool "unpack.ff_only" "$([[ "${CFG_UNPACK_FF_ONLY:-1}" == "1" ]] && printf true || printf false)")"
-  force_tags="$(prompt_bool "unpack.force_tags" "$([[ "${CFG_UNPACK_FORCE_TAGS:-0}" == "1" ]] && printf true || printf false)")"
-  prune_remote_refs="$(prompt_bool "unpack.prune_remote_refs" "$([[ "${CFG_UNPACK_PRUNE_REMOTE_REFS:-1}" == "1" ]] && printf true || printf false)")"
-  prune_local_branches="$(prompt_bool "unpack.prune_local_branches" "$([[ "${CFG_UNPACK_PRUNE_LOCAL_BRANCHES:-0}" == "1" ]] && printf true || printf false)")"
-  clean_peer_refs="$(prompt_bool "unpack.clean_peer_refs" "$([[ "${CFG_UNPACK_CLEAN_PEER_REFS:-1}" == "1" ]] && printf true || printf false)")"
+  ff_only="$(prompt_bool "unpack.ff_only (allow only fast-forward branch updates)" "true")"
+  force_tags="$(prompt_bool "unpack.force_tags (overwrite local tags from incoming pack)" "false")"
+  prune_remote_refs="$(prompt_bool "unpack.prune_remote_refs (remove stale imported remote refs)" "true")"
+  prune_local_branches="$(prompt_bool "unpack.prune_local_branches (delete unmatched local branches after import)" "false")"
+  clean_peer_refs="$(prompt_bool "unpack.clean_peer_refs (clear refs/remotes/<peer>/* before import)" "true")"
 
   local -a set_args
   set_args=(
     --set "pack_dir=$pack_dir"
     --set "pack_prefix=$pack_prefix"
-    --set "project_name=$project_name"
     --set "peer=$peer"
     --set "ff_only=$ff_only"
     --set "force_tags=$force_tags"
@@ -381,7 +368,7 @@ run_unpack_setup() {
 run_unpack_take_setup() {
   load_conf_export "unpack-take-setup"
   local from_value
-  from_value="$(prompt_default "unpack.take.telegram.from" "${CFG_UNPACK_TAKE_TELEGRAM_FROM:-}")"
+  from_value="$(prompt_default "unpack.take.telegram.from (Telegram source chat used for take)")"
   [[ -n "$from_value" ]] || die "unpack.take.telegram.from cannot be empty."
   update_table "${CFG_CONFIG_FILE}" "unpack.take.telegram" --set "from=$from_value"
   printf '[APP] Updated %s [unpack.take.telegram]\n' "$CFG_CONFIG_FILE"
@@ -452,12 +439,12 @@ die_doctor_trailing() {
 consume_unpack_zone_token() {
   local token="$1" next="${2:-}"
   case "$token" in
-    --pack-dir|--pack-prefix|--project-name|--peer|--ff-only|--force-tags|--prune-remote-refs|--prune-local-branches|--clean-peer-refs|--pack-file)
+    --pack-dir|--pack-prefix|--project-name|--machine-name|--peer|--ff-only|--force-tags|--prune-remote-refs|--prune-local-branches|--clean-peer-refs|--pack-file)
       [[ -n "$next" ]] || die "Missing value for $token"
       UNPACK_ZONE_ARGS+=("$token" "$next")
       UNPACK_PARSE_CONSUMED=2
       ;;
-    --pack-dir=*|--pack-prefix=*|--project-name=*|--peer=*|--ff-only=*|--force-tags=*|--prune-remote-refs=*|--prune-local-branches=*|--clean-peer-refs=*|--pack-file=*)
+    --pack-dir=*|--pack-prefix=*|--project-name=*|--machine-name=*|--peer=*|--ff-only=*|--force-tags=*|--prune-remote-refs=*|--prune-local-branches=*|--clean-peer-refs=*|--pack-file=*)
       UNPACK_ZONE_ARGS+=("$token")
       UNPACK_PARSE_CONSUMED=1
       ;;
@@ -465,7 +452,7 @@ consume_unpack_zone_token() {
       UNPACK_ZONE_ARGS+=("$token")
       UNPACK_PARSE_CONSUMED=1
       ;;
-    --api-id|--api-id=*|--api-hash|--api-hash=*|--session|--session=*|--session-string|--session-string=*|--from|--from=*|--python-min|--python-min=*|--proxy-type|--proxy-type=*|--socks5-host|--socks5-host=*|--socks5-port|--socks5-port=*|--socks5-user|--socks5-user=*|--socks5-password|--socks5-password=*|--http-host|--http-host=*|--http-port|--http-port=*|--http-user|--http-user=*|--http-password|--http-password=*|--mtproto-host|--mtproto-host=*|--mtproto-port|--mtproto-port=*|--mtproto-secret|--mtproto-secret=*)
+    --api-id|--api-id=*|--api-hash|--api-hash=*|--session|--session=*|--from|--from=*|--proxy-type|--proxy-type=*|--socks5-host|--socks5-host=*|--socks5-port|--socks5-port=*|--socks5-user|--socks5-user=*|--socks5-password|--socks5-password=*|--http-host|--http-host=*|--http-port|--http-port=*|--http-user|--http-user=*|--http-password|--http-password=*|--mtproto-host|--mtproto-host=*|--mtproto-port|--mtproto-port=*|--mtproto-secret|--mtproto-secret=*)
       die "$(option_name "$token") is only valid for 'unpack take'"
       ;;
     --*|-*)
@@ -480,16 +467,16 @@ consume_unpack_zone_token() {
 consume_take_zone_token() {
   local token="$1" next="${2:-}"
   case "$token" in
-    --api-id|--api-hash|--session|--session-string|--from|--python-min|--proxy-type|--socks5-host|--socks5-port|--socks5-user|--socks5-password|--http-host|--http-port|--http-user|--http-password|--mtproto-host|--mtproto-port|--mtproto-secret)
+    --api-id|--api-hash|--session|--from|--proxy-type|--socks5-host|--socks5-port|--socks5-user|--socks5-password|--http-host|--http-port|--http-user|--http-password|--mtproto-host|--mtproto-port|--mtproto-secret)
       [[ -n "$next" ]] || die "Missing value for $token"
       TAKE_ZONE_ARGS+=("$token" "$next")
       UNPACK_PARSE_CONSUMED=2
       ;;
-    --api-id=*|--api-hash=*|--session=*|--session-string=*|--from=*|--python-min=*|--proxy-type=*|--socks5-host=*|--socks5-port=*|--socks5-user=*|--socks5-password=*|--http-host=*|--http-port=*|--http-user=*|--http-password=*|--mtproto-host=*|--mtproto-port=*|--mtproto-secret=*)
+    --api-id=*|--api-hash=*|--session=*|--from=*|--proxy-type=*|--socks5-host=*|--socks5-port=*|--socks5-user=*|--socks5-password=*|--http-host=*|--http-port=*|--http-user=*|--http-password=*|--mtproto-host=*|--mtproto-port=*|--mtproto-secret=*)
       TAKE_ZONE_ARGS+=("$token")
       UNPACK_PARSE_CONSUMED=1
       ;;
-    --pack-dir|--pack-dir=*|--pack-prefix|--pack-prefix=*|--project-name|--project-name=*|--peer|--peer=*|--ff-only|--ff-only=*|--force-tags|--force-tags=*|--prune-remote-refs|--prune-remote-refs=*|--prune-local-branches|--prune-local-branches=*|--clean-peer-refs|--clean-peer-refs=*|--pack-file|--pack-file=*|--dry-run)
+    --pack-dir|--pack-dir=*|--pack-prefix|--pack-prefix=*|--project-name|--project-name=*|--machine-name|--machine-name=*|--peer|--peer=*|--ff-only|--ff-only=*|--force-tags|--force-tags=*|--prune-remote-refs|--prune-remote-refs=*|--prune-local-branches|--prune-local-branches=*|--clean-peer-refs|--clean-peer-refs=*|--pack-file|--pack-file=*|--dry-run)
       die "$(option_name "$token") is only valid for 'unpack'"
       ;;
     --*|-*)

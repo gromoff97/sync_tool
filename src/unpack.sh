@@ -55,6 +55,19 @@ detect_machine_name() {
   printf '%s' "$name"
 }
 
+expand_home_path() {
+  local path="$1"
+  if [[ "$path" == "~" ]]; then
+    printf '%s' "${HOME:-$path}"
+    return 0
+  fi
+  if [[ "$path" == "~/"* && -n "${HOME:-}" ]]; then
+    printf '%s/%s' "$HOME" "${path#~/}"
+    return 0
+  fi
+  printf '%s' "$path"
+}
+
 to_posix_path() {
   local p="$1"
   if [[ -z "$p" ]]; then
@@ -463,9 +476,6 @@ download_pack_from_telegram() {
     --no-tmp-rename
   )
   append_telegram_proxy_args cmd
-  if [[ -n "$TG_SESSION_STRING" ]]; then
-    cmd+=(--session-string "$TG_SESSION_STRING")
-  fi
   if [[ -n "$TG_FROM" ]]; then
     cmd+=(--from "$TG_FROM")
   fi
@@ -645,7 +655,7 @@ Subcommands:
                                (see: unpack take --help)
 
 Config:
-  Use the top-level `unpack` wrapper with `conf.toml` in the repo root.
+  Use the top-level `unpack` wrapper with the global `conf.toml` in the sync_tool directory.
 
 Example:
   ./unpack --pack-dir /c/Work/in
@@ -667,7 +677,7 @@ Options (same as unpack):
   --help
 
   Config:
-  Use the top-level `unpack take` wrapper with root `conf.toml`.
+  Use the top-level `unpack take` wrapper with the global `conf.toml` in the sync_tool directory.
   The internal runner expects normalized Telegram/common/proxy runtime arguments.
 
   Example:
@@ -695,11 +705,11 @@ PACK_DOWNLOADED="0"
 DRY_RUN="0"
 PULL_MODE="0"
 TELEGRAM_DOCTOR="0"
+MACHINE_NAME=""
 TG_API_ID=""
 TG_API_HASH=""
 TG_FROM=""
 TG_SESSION=""
-TG_SESSION_STRING=""
 TG_PROXY_TYPE="none"
 TG_SOCKS5_HOST=""
 TG_SOCKS5_PORT=""
@@ -751,6 +761,8 @@ while [[ $# -gt 0 ]]; do
     --pack-prefix=*)          PACK_PREFIX="${1#*=}"; shift 1;;
     --project-name)           PROJECT_NAME="${2:-}"; shift 2;;
     --project-name=*)         PROJECT_NAME="${1#*=}"; shift 1;;
+    --machine-name)           MACHINE_NAME="${2:-}"; shift 2;;
+    --machine-name=*)         MACHINE_NAME="${1#*=}"; shift 1;;
 
     --peer)                   PEER="${2:-}"; shift 2;;
     --peer=*)                 PEER="${1#*=}"; shift 1;;
@@ -773,8 +785,6 @@ while [[ $# -gt 0 ]]; do
     --api-hash=*)             TG_API_HASH="${1#*=}"; shift 1;;
     --session)                TG_SESSION="${2:-}"; shift 2;;
     --session=*)              TG_SESSION="${1#*=}"; shift 1;;
-    --session-string)         TG_SESSION_STRING="${2:-}"; shift 2;;
-    --session-string=*)       TG_SESSION_STRING="${1#*=}"; shift 1;;
     --from)                   TG_FROM="${2:-}"; shift 2;;
     --from=*)                 TG_FROM="${1#*=}"; shift 1;;
     --python-min)             TG_PYTHON_MIN="${2:-}"; shift 2;;
@@ -812,6 +822,7 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+PACK_DIR="$(expand_home_path "$PACK_DIR")"
 PACK_DIR_POSIX="$(to_posix_path "$PACK_DIR")"
 if [[ -n "$PACK_FILE_OVERRIDE" ]]; then
   PACK_FILE_OVERRIDE="$(to_posix_path "$PACK_FILE_OVERRIDE")"
@@ -888,9 +899,6 @@ send_ack_message() {
     --parse-mode html
   )
   append_telegram_proxy_args cmd
-  if [[ -n "$TG_SESSION_STRING" ]]; then
-    cmd+=(--session-string "$TG_SESSION_STRING")
-  fi
 
   "${cmd[@]}" >/dev/null 2>&1 || true
 }
@@ -933,9 +941,6 @@ send_failure_log() {
     --parse-mode html
   )
   append_telegram_proxy_args cmd
-  if [[ -n "$TG_SESSION_STRING" ]]; then
-    cmd+=(--session-string "$TG_SESSION_STRING")
-  fi
 
   "${cmd[@]}" >/dev/null 2>&1 || true
 }
@@ -963,9 +968,6 @@ telegram_doctor() {
     --from "$TG_FROM"
   )
   append_telegram_proxy_args cmd
-  if [[ -n "$TG_SESSION_STRING" ]]; then
-    cmd+=(--session-string "$TG_SESSION_STRING")
-  fi
 
   if [[ -z "$C_RESET" ]]; then
     NO_COLOR=1 "${cmd[@]}"
@@ -1060,7 +1062,9 @@ fi
 if [[ "$PULL_MODE" == "1" ]]; then
   [[ -n "$PROJECT_NAME" ]] || die "Project name required for take. Use --project-name or run inside repo."
   require_telegram_config "runtime arguments"
-  MACHINE_NAME="$(detect_machine_name)"
+  if [[ -z "$MACHINE_NAME" ]]; then
+    MACHINE_NAME="$(detect_machine_name)"
+  fi
   if [[ "$DRY_RUN" == "1" ]]; then
     info "Dry-run: would take latest pack from Telegram for project '$PROJECT_NAME'."
     PULL_SKIP_ACK="1"

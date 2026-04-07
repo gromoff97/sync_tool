@@ -10,6 +10,14 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class CliDoctorTests(unittest.TestCase):
+    def make_tool_copy(self, parent: pathlib.Path) -> pathlib.Path:
+        tool_root = parent / "tool"
+        tool_root.mkdir()
+        shutil.copy2(ROOT / "pack", tool_root / "pack")
+        shutil.copy2(ROOT / "unpack", tool_root / "unpack")
+        shutil.copytree(ROOT / "src", tool_root / "src")
+        return tool_root
+
     def test_pack_push_is_rejected_with_migration_error(self):
         with tempfile.TemporaryDirectory() as td:
             repo = pathlib.Path(td) / "repo"
@@ -136,8 +144,9 @@ class CliDoctorTests(unittest.TestCase):
 
     def test_unpack_doctor_rejects_invalid_boolean_flag(self):
         with tempfile.TemporaryDirectory() as td:
-            config_path = pathlib.Path(td) / "conf.toml"
-            config_path.write_text(
+            temp_root = pathlib.Path(td)
+            tool_root = self.make_tool_copy(temp_root)
+            (tool_root / "conf.toml").write_text(
                 textwrap.dedent(
                     """
                     [unpack]
@@ -152,8 +161,8 @@ class CliDoctorTests(unittest.TestCase):
             )
 
             completed = subprocess.run(
-                [str(ROOT / "unpack"), "doctor"],
-                cwd=td,
+                [str(tool_root / "unpack"), "doctor"],
+                cwd=temp_root,
                 text=True,
                 capture_output=True,
             )
@@ -267,7 +276,9 @@ class CliDoctorTests(unittest.TestCase):
 
     def test_pack_send_doctor_rejects_invalid_pack_config_before_telegram(self):
         with tempfile.TemporaryDirectory() as td:
-            repo = pathlib.Path(td) / "repo"
+            temp_root = pathlib.Path(td)
+            tool_root = self.make_tool_copy(temp_root)
+            repo = temp_root / "repo"
             repo.mkdir()
 
             subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
@@ -281,7 +292,7 @@ class CliDoctorTests(unittest.TestCase):
             subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
             subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
 
-            (repo / "conf.toml").write_text(
+            (tool_root / "conf.toml").write_text(
                 textwrap.dedent(
                     f"""
                     [pack]
@@ -302,7 +313,7 @@ class CliDoctorTests(unittest.TestCase):
             )
 
             completed = subprocess.run(
-                [str(ROOT / "pack"), "send", "doctor"],
+                [str(tool_root / "pack"), "send", "doctor"],
                 cwd=repo,
                 text=True,
                 capture_output=True,
@@ -365,8 +376,11 @@ class CliDoctorTests(unittest.TestCase):
 
     def test_unpack_take_doctor_rejects_invalid_unpack_config_before_telegram(self):
         with tempfile.TemporaryDirectory() as td:
-            workdir = pathlib.Path(td)
-            (workdir / "conf.toml").write_text(
+            temp_root = pathlib.Path(td)
+            tool_root = self.make_tool_copy(temp_root)
+            workdir = temp_root / "work"
+            workdir.mkdir()
+            (tool_root / "conf.toml").write_text(
                 textwrap.dedent(
                     """
                     [unpack]
@@ -389,7 +403,7 @@ class CliDoctorTests(unittest.TestCase):
             )
 
             completed = subprocess.run(
-                [str(ROOT / "unpack"), "take", "doctor"],
+                [str(tool_root / "unpack"), "take", "doctor"],
                 cwd=workdir,
                 text=True,
                 capture_output=True,
@@ -397,3 +411,148 @@ class CliDoctorTests(unittest.TestCase):
 
         self.assertNotEqual(0, completed.returncode)
         self.assertIn("--ff-only must be 0|1", completed.stdout + completed.stderr)
+
+    def test_unpack_take_inside_repo_ignores_mismatched_project_name_with_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp_root = pathlib.Path(td)
+            tool_root = self.make_tool_copy(temp_root)
+            repo = temp_root / "repo"
+            pack_dir = temp_root / "packs"
+            repo.mkdir()
+            pack_dir.mkdir()
+
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Codex"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "codex@example.com"], cwd=repo, check=True)
+            (repo / "README.md").write_text("hello\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+            (tool_root / "conf.toml").write_text(
+                textwrap.dedent(
+                    f"""
+                    [unpack]
+                    pack_dir = "{pack_dir.as_posix()}"
+                    pack_prefix = "syncpack"
+                    peer = "sync"
+
+                    [unpack.take.telegram]
+                    from = "@source"
+
+                    [telegram.common]
+                    api_id = 1
+                    api_hash = "hash"
+                    session = "sess"
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [str(tool_root / "unpack"), "--project-name", "other", "--dry-run", "take"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+            )
+
+        combined = completed.stdout + completed.stderr
+        self.assertEqual(0, completed.returncode, combined)
+        self.assertIn("--project-name is ignored when running inside an existing repository.", combined)
+        self.assertIn("Dry-run: would take latest pack from Telegram for project 'repo'.", combined)
+
+    def test_pack_doctor_uses_global_tool_conf_not_repo_local_conf(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp_root = pathlib.Path(td)
+            tool_root = self.make_tool_copy(temp_root)
+            repo = temp_root / "repo"
+            pack_dir = temp_root / "packs"
+            repo.mkdir()
+            pack_dir.mkdir()
+
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Codex"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "codex@example.com"], cwd=repo, check=True)
+            (repo / "README.md").write_text("hello\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+            (tool_root / "conf.toml").write_text(
+                textwrap.dedent(
+                    f"""
+                    [pack]
+                    output_dir = "{pack_dir.as_posix()}"
+                    pack_prefix = "syncpack"
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            (repo / "conf.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [pack]
+                    output_dir = "/definitely/wrong"
+                    pack_prefix = "syncpack"
+                    machine_name = "legacy"
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [str(tool_root / "pack"), "doctor"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+
+    def test_pack_send_doctor_rejects_removed_session_string_from_global_conf(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp_root = pathlib.Path(td)
+            tool_root = self.make_tool_copy(temp_root)
+            repo = temp_root / "repo"
+            pack_dir = temp_root / "packs"
+            repo.mkdir()
+            pack_dir.mkdir()
+
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Codex"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "codex@example.com"], cwd=repo, check=True)
+            (repo / "README.md").write_text("hello\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+            (tool_root / "conf.toml").write_text(
+                textwrap.dedent(
+                    f"""
+                    [pack]
+                    output_dir = "{pack_dir.as_posix()}"
+                    pack_prefix = "syncpack"
+
+                    [pack.send.telegram]
+                    to = "@target"
+
+                    [telegram.common]
+                    api_id = 1
+                    api_hash = "hash"
+                    session = "sess"
+                    session_string = "legacy"
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [str(tool_root / "pack"), "send", "doctor"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("[telegram.common].session_string is no longer supported", completed.stdout + completed.stderr)

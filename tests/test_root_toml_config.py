@@ -26,24 +26,27 @@ class RootTomlConfigTests(unittest.TestCase):
             command="pack",
             cwd="/tmp/repo/subdir",
             git_top_level="/tmp/repo",
+            tool_root="/opt/sync_tool",
         )
-        self.assertEqual("/tmp/repo", root)
+        self.assertEqual("/opt/sync_tool", root)
 
     def test_unpack_outside_repo_uses_cwd_as_config_root(self):
         root = self.root_config.resolve_config_root(
             command="unpack",
             cwd="/tmp/outside",
             git_top_level="",
+            tool_root="/opt/sync_tool",
         )
-        self.assertEqual("/tmp/outside", root)
+        self.assertEqual("/opt/sync_tool", root)
 
     def test_unpack_inside_repo_uses_git_top_level_as_config_root(self):
         root = self.root_config.resolve_config_root(
             command="unpack-take",
             cwd="/tmp/repo/subdir",
             git_top_level="/tmp/repo",
+            tool_root="/opt/sync_tool",
         )
-        self.assertEqual("/tmp/repo", root)
+        self.assertEqual("/opt/sync_tool", root)
 
     def test_dotted_keys_count_as_existing_table(self):
         with tempfile.TemporaryDirectory() as td:
@@ -131,7 +134,7 @@ class RootTomlConfigTests(unittest.TestCase):
                 ValueError,
                 r"\[pack\]\.update_remote is no longer supported; use \[pack\]\.update",
             ):
-                self.root_config.build_export("pack", td, td)
+                self.root_config.build_export("pack", td, td, td)
 
     def test_build_export_rejects_removed_pack_push_section(self):
         with tempfile.TemporaryDirectory() as td:
@@ -155,7 +158,84 @@ class RootTomlConfigTests(unittest.TestCase):
                 ValueError,
                 r"\[pack\.push\.telegram\] is no longer supported; use \[pack\.send\.telegram\]",
             ):
-                self.root_config.build_export("pack", td, td)
+                self.root_config.build_export("pack", td, td, td)
+
+    def test_build_export_rejects_removed_global_fields(self):
+        cases = [
+            (
+                "pack_machine_name",
+                """
+                [pack]
+                output_dir = "syncpacks"
+                pack_prefix = "syncpack"
+                machine_name = "box"
+                """,
+                r"\[pack\]\.machine_name is no longer supported; use \[telegram\.common\]\.local_machine_name",
+            ),
+            (
+                "unpack_project_name",
+                """
+                [unpack]
+                pack_dir = "syncpacks"
+                pack_prefix = "syncpack"
+                project_name = "demo"
+                peer = "sync"
+                """,
+                r"\[unpack\]\.project_name is no longer supported; use --project-name for outside-repo unpack take bootstrap",
+            ),
+            (
+                "telegram_session_string",
+                """
+                [telegram.common]
+                api_id = 1
+                api_hash = "hash"
+                session = "sess"
+                session_string = "abc"
+                """,
+                r"\[telegram\.common\]\.session_string is no longer supported; use \[telegram\.common\]\.session",
+            ),
+            (
+                "telegram_phone",
+                """
+                [telegram.common]
+                api_id = 1
+                api_hash = "hash"
+                session = "sess"
+                phone = "+70000000000"
+                """,
+                r"\[telegram\.common\]\.phone is no longer supported",
+            ),
+            (
+                "telegram_caption",
+                """
+                [telegram.common]
+                api_id = 1
+                api_hash = "hash"
+                session = "sess"
+                caption = "text"
+                """,
+                r"\[telegram\.common\]\.caption is no longer supported",
+            ),
+            (
+                "telegram_python_min",
+                """
+                [telegram.common]
+                api_id = 1
+                api_hash = "hash"
+                session = "sess"
+                python_min = "3.8"
+                """,
+                r"\[telegram\.common\]\.python_min is no longer supported",
+            ),
+        ]
+
+        for name, config_text, pattern in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as td:
+                config_path = pathlib.Path(td) / "conf.toml"
+                config_path.write_text(textwrap.dedent(config_text).strip() + "\n", encoding="utf-8")
+
+                with self.assertRaisesRegex(ValueError, pattern):
+                    self.root_config.build_export("pack", td, td, td)
 
     def test_export_config_rejects_multiple_proxy_tables(self):
         document = {
@@ -206,6 +286,8 @@ class RootTomlConfigTests(unittest.TestCase):
                     "--cwd",
                     td,
                     "--git-top-level",
+                    td,
+                    "--tool-root",
                     td,
                 ],
                 check=True,
@@ -273,7 +355,6 @@ class RootTomlConfigTests(unittest.TestCase):
                 {
                     "output_dir": "other-syncpacks",
                     "pack_prefix": "syncpack",
-                    "machine_name": "box",
                     "update": -1,
                 },
             )
@@ -282,6 +363,47 @@ class RootTomlConfigTests(unittest.TestCase):
 
         self.assertEqual("other-syncpacks", document["pack"]["output_dir"])
         self.assertEqual("@sync-target", document["pack"]["send"]["telegram"]["to"])
+
+    def test_build_export_uses_tool_root_conf_for_pack_scope(self):
+        with tempfile.TemporaryDirectory() as td:
+            tool_root = pathlib.Path(td) / "tool"
+            repo_root = pathlib.Path(td) / "repo"
+            tool_root.mkdir()
+            repo_root.mkdir()
+
+            (tool_root / "conf.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [pack]
+                    output_dir = "global-syncpacks"
+                    pack_prefix = "syncpack"
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            (repo_root / "conf.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [pack]
+                    output_dir = "repo-syncpacks"
+                    pack_prefix = "syncpack"
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            exported = self.root_config.build_export(
+                "pack",
+                str(repo_root),
+                str(repo_root),
+                str(tool_root),
+            )
+
+        self.assertEqual(str(tool_root), exported["CFG_CONFIG_ROOT"])
+        self.assertEqual(str(tool_root / "conf.toml"), exported["CFG_CONFIG_FILE"])
+        self.assertEqual("global-syncpacks", exported["CFG_PACK_OUTPUT_DIR"])
 
 
 if __name__ == "__main__":

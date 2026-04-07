@@ -45,6 +45,12 @@ UNPACK_COMMANDS = {
 REMOVED_CONFIG_KEYS = {
     "pack.update_remote": "[pack].update_remote is no longer supported; use [pack].update",
     "pack.recent_days": "[pack].recent_days is no longer supported; use [pack].update",
+    "pack.machine_name": "[pack].machine_name is no longer supported; use [telegram.common].local_machine_name",
+    "unpack.project_name": "[unpack].project_name is no longer supported; use --project-name for outside-repo unpack take bootstrap",
+    "telegram.common.session_string": "[telegram.common].session_string is no longer supported; use [telegram.common].session",
+    "telegram.common.phone": "[telegram.common].phone is no longer supported",
+    "telegram.common.caption": "[telegram.common].caption is no longer supported",
+    "telegram.common.python_min": "[telegram.common].python_min is no longer supported",
 }
 
 REMOVED_CONFIG_TABLES = {
@@ -60,19 +66,14 @@ def normalize_command(command: str) -> str:
     return value
 
 
-def resolve_config_root(command: str, cwd: str, git_top_level: str) -> str:
-    normalized = normalize_command(command)
+def resolve_config_root(command: str, cwd: str, git_top_level: str, tool_root: str) -> str:
+    normalize_command(command)
     cwd = os.path.abspath(cwd)
     git_top_level = os.path.abspath(git_top_level) if git_top_level else ""
-
-    if normalized in PACK_COMMANDS:
-        if not git_top_level:
-            raise ValueError("pack commands require a git top-level directory")
-        return git_top_level
-
-    if git_top_level:
-        return git_top_level
-    return cwd
+    tool_root = os.path.abspath(tool_root) if tool_root else ""
+    if not tool_root:
+        raise ValueError("tool_root is required to resolve global conf.toml")
+    return tool_root
 
 
 def load_conf_toml(path: str) -> Dict[str, Any]:
@@ -203,8 +204,8 @@ def shell_export_lines(values: Mapping[str, str]) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def build_export(command: str, cwd: str, git_top_level: str) -> Dict[str, str]:
-    config_root = resolve_config_root(command, cwd, git_top_level)
+def build_export(command: str, cwd: str, git_top_level: str, tool_root: str) -> Dict[str, str]:
+    config_root = resolve_config_root(command, cwd, git_top_level, tool_root)
     config_file = os.path.join(config_root, "conf.toml")
     exported = {
         "CFG_CONFIG_ROOT": config_root,
@@ -307,6 +308,7 @@ def parse_args() -> argparse.Namespace:
     export_parser.add_argument("--command", required=True)
     export_parser.add_argument("--cwd", required=True)
     export_parser.add_argument("--git-top-level", default="")
+    export_parser.add_argument("--tool-root", required=True)
 
     update_parser = subparsers.add_parser("update-table", help="Replace one TOML table atomically")
     update_parser.add_argument("--config-file", required=True)
@@ -319,7 +321,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.command_name == "export":
-        values = build_export(args.command, args.cwd, args.git_top_level)
+        values = build_export(args.command, args.cwd, args.git_top_level, args.tool_root)
         sys.stdout.write(shell_export_lines(values))
         return 0
     if args.command_name == "update-table":

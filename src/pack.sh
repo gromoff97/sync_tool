@@ -96,6 +96,19 @@ detect_machine_name() {
   printf '%s' "$name"
 }
 
+expand_home_path() {
+  local path="$1"
+  if [[ "$path" == "~" ]]; then
+    printf '%s' "${HOME:-$path}"
+    return 0
+  fi
+  if [[ "$path" == "~/"* && -n "${HOME:-}" ]]; then
+    printf '%s/%s' "$HOME" "${path#~/}"
+    return 0
+  fi
+  printf '%s' "$path"
+}
+
 is_within_repo() {
   local repo="$1" path="$2"
   repo="${repo%/}/"
@@ -537,9 +550,6 @@ send_to_telegram_personal() {
     cmd+=(--require-ack --ack-text "$TG_ACK_TEXT" --scan-limit "$TG_ACK_SCAN_LIMIT")
   fi
   append_telegram_proxy_args cmd
-  if [[ -n "$TG_SESSION_STRING" ]]; then
-    cmd+=(--session-string "$TG_SESSION_STRING")
-  fi
   if [[ -n "$caption" ]]; then
     cmd+=(--caption "$caption")
   fi
@@ -619,7 +629,7 @@ Subcommands:
   send                     send archive via Telegram (see: pack send --help)
 
 Config:
-  Use the top-level `pack` wrapper with `conf.toml` in the repo root.
+  Use the top-level `pack` wrapper with the global `conf.toml` in the sync_tool directory.
 
 Example:
   ./pack
@@ -645,7 +655,7 @@ Options (same as pack):
   --help
 
 Config:
-  Use the top-level `pack send` wrapper with root `conf.toml`.
+  Use the top-level `pack send` wrapper with the global `conf.toml` in the sync_tool directory.
   The internal runner expects normalized Telegram/common/proxy runtime arguments.
 
 Examples:
@@ -679,9 +689,6 @@ telegram_doctor() {
     --to "$TG_TO"
   )
   append_telegram_proxy_args cmd
-  if [[ -n "$TG_SESSION_STRING" ]]; then
-    cmd+=(--session-string "$TG_SESSION_STRING")
-  fi
 
   if [[ -z "$C_RESET" ]]; then
     NO_COLOR=1 "${cmd[@]}"
@@ -723,9 +730,6 @@ check_telegram_ack() {
     --current-sha "$current_sha"
   )
   append_telegram_proxy_args cmd
-  if [[ -n "$TG_SESSION_STRING" ]]; then
-    cmd+=(--session-string "$TG_SESSION_STRING")
-  fi
 
   if [[ -z "$C_RESET" ]]; then
     NO_COLOR=1 "${cmd[@]}"
@@ -766,9 +770,6 @@ send_telegram_close() {
     --parse-mode html
   )
   append_telegram_proxy_args cmd
-  if [[ -n "$TG_SESSION_STRING" ]]; then
-    cmd+=(--session-string "$TG_SESSION_STRING")
-  fi
 
   if [[ -z "$C_RESET" ]]; then
     NO_COLOR=1 "${cmd[@]}"
@@ -802,9 +803,6 @@ delete_telegram_message() {
     --delete-message "$msg_id"
   )
   append_telegram_proxy_args cmd
-  if [[ -n "$TG_SESSION_STRING" ]]; then
-    cmd+=(--session-string "$TG_SESSION_STRING")
-  fi
 
   if [[ -z "$C_RESET" ]]; then
     NO_COLOR=1 "${cmd[@]}"
@@ -828,7 +826,6 @@ TG_API_ID=""
 TG_API_HASH=""
 TG_TO=""
 TG_SESSION=""
-TG_SESSION_STRING=""
 TG_PROXY_TYPE="none"
 TG_SOCKS5_HOST=""
 TG_SOCKS5_PORT=""
@@ -921,8 +918,6 @@ while [[ $# -gt 0 ]]; do
     --api-hash=*)      TG_API_HASH="${1#*=}"; shift 1;;
     --session)         TG_SESSION="${2:-}"; shift 2;;
     --session=*)       TG_SESSION="${1#*=}"; shift 1;;
-    --session-string)  TG_SESSION_STRING="${2:-}"; shift 2;;
-    --session-string=*) TG_SESSION_STRING="${1#*=}"; shift 1;;
     --to)              TG_TO="${2:-}"; shift 2;;
     --to=*)            TG_TO="${1#*=}"; shift 1;;
     --ack-scan-limit)  TG_ACK_SCAN_LIMIT="${2:-}"; shift 2;;
@@ -970,7 +965,8 @@ TOOL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 [[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
 if [[ "$TELEGRAM_DOCTOR" != "1" ]]; then
-  [[ -n "$OUTPUT_DIR" ]] || die "HOME is not set; use --output-dir PATH."
+OUTPUT_DIR="$(expand_home_path "$OUTPUT_DIR")"
+[[ -n "$OUTPUT_DIR" ]] || die "HOME is not set; use --output-dir PATH."
 fi
 if [[ -n "$WITH_TAGS" && "$WITH_TAGS" != "0" && "$WITH_TAGS" != "1" ]]; then
   die "--with-tags must be 0|1"
