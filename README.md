@@ -1,29 +1,29 @@
 # sync_tool
 
-Pack a Git repository into a `.tgz`, send it through Telegram, and pull/apply the latest archive on another machine.
+Pack a Git repository into a `.tgz`, send it through Telegram, and take/apply the latest archive on another machine.
 
-The project is built around two user-facing commands:
+The user-facing commands are:
 
-- `./pack` to create an archive, and optionally send it to Telegram
-- `./unpack` to apply a local archive, or pull the latest one from Telegram first
+- `./pack`
+- `./unpack`
 
 ## Quick Start
 
 ```bash
-./pack
-./pack --mproto-login
-./pack push
-./unpack pull
-```
+./pack setup
+./pack doctor
+./pack send setup
+./pack send
 
-- `./pack` creates a local sync archive in `~/syncpacks`
-- `./pack --mproto-login` creates or refreshes `conf/telegram.conf`
-- `./pack push` creates an archive and sends it through Telegram
-- `./unpack pull` downloads the latest archive from Telegram and applies it
+./unpack setup
+./unpack doctor
+./unpack take setup
+./unpack take
+```
 
 ## Install
 
-The Telegram flows use offline Python wheels from `offline/python_wheels`.
+Telegram flows use the offline wheels from `offline/python_wheels`.
 
 ```bash
 python -m ensurepip --upgrade
@@ -33,9 +33,9 @@ python -m pip install --no-index --find-links offline/python_wheels telethon col
 Package notes:
 
 - `telethon` is the Telegram client library
-- `colorama` keeps console output readable on Windows terminals
-- `python-socks` is needed for transport proxy mode via `telegram_proxy`
-- MTProto proxy uses a separate Telegram connection mode and does not use `python-socks`
+- `colorama` improves terminal output on Windows
+- `python-socks` is required for transport proxy modes: `socks5` and `http`
+- MTProto proxy uses a dedicated Telethon connection mode
 
 Quick import check:
 
@@ -45,55 +45,124 @@ python -c "import telethon, colorama, pyaes, rsa, pyasn1; print('ok')"
 
 ## Configuration
 
-The tool uses three config files:
+The tool now uses one required root config file:
 
-- `conf/pack.conf` for archive creation defaults such as output directory, prefix, branch selection, and remote update behavior
-- `conf/unpack.conf` for archive apply defaults such as input directory, project name, peer name, and prune/fast-forward behavior
-- `conf/telegram.conf` for Telegram login/session settings and proxy configuration
+- `conf.toml` for live settings
+- `conf.example.toml` as a full template
 
-You do not need every file on day one. The smallest useful path is:
+`conf.toml` is expected in the target project root:
 
-1. install the Python packages
-2. run `./pack --mproto-login`
-3. use `./pack push` and `./unpack pull`
+- for `pack*`, that means the current Git repository top-level
+- for `unpack*`, that means the current Git repository top-level if you are inside one, otherwise the current directory
 
-## Telegram Config
+`conf.toml` is intentionally ignored by Git through `.gitignore`.
 
-Base example without proxy:
+## Config Layout
 
-```ini
-telegram_api_id=123456
-telegram_api_hash=0123456789abcdef0123456789abcdef
-telegram_session=~/.sync_tool_telegram
-telegram_to=@target_chat
-telegram_from=@source_chat
-telegram_python_min=3.8
+```toml
+[pack]
+output_dir = "C:/Users/USERNAME/syncpacks"
+pack_prefix = "syncpack"
+machine_name = ""
+remote_name = "origin"
+# update = -1
+
+[pack.send.telegram]
+to = "https://t.me/your-destination"
+
+[unpack]
+pack_dir = "C:/Users/USERNAME/syncpacks"
+pack_prefix = "syncpack"
+project_name = ""
+peer = "sync"
+ff_only = true
+force_tags = false
+prune_remote_refs = true
+prune_local_branches = false
+clean_peer_refs = true
+
+[unpack.take.telegram]
+from = "https://t.me/your-source"
+
+[telegram.common]
+api_id = 123456
+api_hash = "replace_me"
+session = "C:/Users/USERNAME/.sync_tool_telegram"
+session_string = ""
+phone = "+70000000000"
+ack_scan_limit = 32
+caption = ""
+python_min = "3.8"
 ```
 
-Transport proxy example:
+Proxy is optional. If you use it, define at most one of these blocks:
 
-```ini
-telegram_proxy=socks5://user:pass@127.0.0.1:1080
+```toml
+[telegram.common.proxy.socks5]
+host = "127.0.0.1"
+port = 1080
+username = ""
+password = ""
 ```
 
-Supported transport proxy schemes are `socks5`, `socks4`, and `http`.
-
-MTProto proxy example:
-
-```ini
-telegram_mtproxy_host=mtproxy.example.com
-telegram_mtproxy_port=443
-telegram_mtproxy_secret=00000000000000000000000000000000
+```toml
+[telegram.common.proxy.http]
+host = "proxy.example.com"
+port = 8080
+username = ""
+password = ""
 ```
 
-Important:
+```toml
+[telegram.common.proxy.mtproto]
+host = "mtproxy.example.com"
+port = 443
+secret = "0123456789abcdef0123456789abcdef"
+```
 
-- use `telegram_to` for `pack push`
-- use `telegram_from` for `unpack pull`
-- you can keep either `telegram_session` or `telegram_session_string`
-- `telegram_proxy` and `telegram_mtproxy_*` are mutually exclusive
+If no `telegram.common.proxy.*` section exists, Telegram works without a proxy.
 
-## Common Workflows
+## Setup Commands
+
+Interactive setup updates only the relevant TOML section and rewrites `conf.toml` atomically.
+
+```bash
+./pack setup
+./pack send setup
+./unpack setup
+./unpack take setup
+```
+
+What each one edits:
+
+- `./pack setup` -> `[pack]`
+- `./pack send setup` -> `[pack.send.telegram]`
+- `./unpack setup` -> `[unpack]`
+- `./unpack take setup` -> `[unpack.take.telegram]`
+
+Common Telegram settings and proxy settings are edited manually in `conf.toml`.
+
+## Doctor Commands
+
+Use doctor commands to validate config and environment before running the real operation.
+
+```bash
+./pack doctor
+./pack send doctor
+./unpack doctor
+./unpack take doctor
+```
+
+What they check:
+
+- `./pack doctor` validates `[pack]` and runs the pack flow in dry-run mode
+- `./pack send doctor` validates `[pack]`, `[pack.send.telegram]`, `[telegram.common]`, and Telegram connectivity prerequisites
+- `./unpack doctor` validates `[unpack]`
+- `./unpack take doctor` validates `[unpack]`, `[unpack.take.telegram]`, `[telegram.common]`, and take prerequisites
+
+`--dry-run` still exists on the real runtime commands and means “show what this invocation would do”.
+
+## Runtime Commands
 
 Create a local archive:
 
@@ -101,105 +170,50 @@ Create a local archive:
 ./pack
 ```
 
+Create a local archive using config, but override one value from CLI:
+
+```bash
+./pack --output-dir /tmp/syncpacks
+./pack --update
+./pack --update 14
+```
+
 Create and send an archive through Telegram:
 
 ```bash
-./pack push
+./pack send
 ```
 
-First Telegram login or session refresh:
-
-```bash
-./pack --mproto-login
-```
-
-Find a Telegram chat before saving `telegram_to`:
-
-```bash
-./pack --list-chat my-project
-```
-
-Apply the latest local archive from `~/syncpacks`:
+Apply the latest local archive:
 
 ```bash
 ./unpack
 ```
 
-Pull the latest archive from Telegram and apply it:
+Take the latest archive from Telegram and apply it:
 
 ```bash
-./unpack pull
+./unpack take
 ```
 
-## Compact Reference
+CLI flags still override `conf.toml` for the current invocation.
 
-### `pack`
+Examples:
 
-Most useful options:
+- `./pack --update` overrides `[pack].update`
+- `./pack --update 14` overrides `[pack].update`
+- `./unpack --peer mirror` overrides `[unpack].peer`
 
-- `--output-dir PATH`
-- `--pack-prefix PREFIX`
-- `--machine-name NAME`
-- `-u`, `--update-remote`
-- `--remote NAME`
-- `--recent-days N`
-- `--branch NAME`
-- `--branches LIST`
-- `--with-tags 0|1`
-- `--dry-run`
+Important `pack --update` behavior:
 
-### `pack push`
-
-Uses the same pack options, then sends the resulting archive through Telegram.
-
-Important behavior:
-
-- requires `conf/telegram.conf`
-- prompts for `telegram_to` if it is still missing
-- supports both transport proxy and MTProto proxy through `conf/telegram.conf`
-
-### `pack --mproto-login`
-
-Use this when:
-
-- setting up Telegram for the first time
-- refreshing a broken or expired session
-- changing account/session settings in `conf/telegram.conf`
-
-Related capability:
-
-- `--list-chat TEXT` lists matching chats by name or username
-
-### `unpack`
-
-Most useful options:
-
-- `--pack-dir PATH`
-- `--pack-file PATH`
-- `--pack-prefix PREFIX`
-- `--project-name NAME`
-- `--peer NAME`
-- `--dry-run`
-- `--ff-only 0|1`
-- `--force-tags 0|1`
-- `--prune-remote-refs 0|1`
-- `--prune-local-branches 0|1`
-- `--clean-peer-refs 0|1`
-
-### `unpack pull`
-
-Uses the unpack options, but downloads the latest matching archive from Telegram first.
-
-Important behavior:
-
-- requires `conf/telegram.conf`
-- uses `telegram_from` as the source chat
-- supports both transport proxy and MTProto proxy through `conf/telegram.conf`
+- if `[pack].update` is absent, no remote update happens
+- if `[pack].update = -1`, remote update refreshes only already existing local branches
+- if `[pack].update > 0`, remote update also brings in recent remote branches from the last N days
 
 ## Troubleshooting
 
-- Missing Python packages: rerun the offline `pip install` command from this README.
-- Telegram is not configured: run `./pack --mproto-login`.
-- `pack push` has no destination chat: set `telegram_to` or let the command prompt for it.
-- `unpack pull` has no source chat: set `telegram_from` in `conf/telegram.conf`.
-- Proxy config is invalid: use either `telegram_proxy` or `telegram_mtproxy_*`, not both.
+- `conf.toml` is missing: run the relevant setup command first.
+- Telegram auth is missing or expired: update `[telegram.common]` manually and rerun a `doctor` command.
+- Proxy config is invalid: keep at most one `telegram.common.proxy.*` block.
+- `pack doctor` fails on a dirty repository: commit or stash everything except `conf.toml` / `conf.example.toml`.
+- `pack send` or `unpack take` on Windows cannot find proxy support: install `python-socks` from `offline/python_wheels`.

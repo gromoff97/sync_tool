@@ -2,4 +2,609 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$script_dir/src/unpack.sh" "$@"
+runner="$script_dir/src/unpack.sh"
+root_helper="$script_dir/src/root_config.py"
+
+die() {
+  printf '[ERR] %s\n' "$*" >&2
+  exit 1
+}
+
+pick_config_python() {
+  if command -v python3 >/dev/null 2>&1; then
+    CONFIG_PY=(python3)
+  elif command -v python >/dev/null 2>&1; then
+    CONFIG_PY=(python)
+  elif command -v py >/dev/null 2>&1; then
+    CONFIG_PY=(py -3)
+  else
+    die "Python is required to read conf.toml."
+  fi
+}
+
+load_conf_export() {
+  local scope="$1"
+  local cwd git_top output
+  cwd="$(pwd)"
+  git_top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  output="$("${CONFIG_PY[@]}" "$root_helper" export --command "$scope" --cwd "$cwd" --git-top-level "$git_top")" \
+    || die "Failed to read conf.toml for scope '$scope'."
+  eval "$output"
+}
+
+update_table() {
+  local config_file="$1" table="$2"
+  shift 2
+  "${CONFIG_PY[@]}" "$root_helper" update-table --config-file "$config_file" --table "$table" "$@"
+}
+
+prompt_default() {
+  local label="$1" default_value="${2:-}" response=""
+  if [[ -n "$default_value" ]]; then
+    read -r -p "$label [$default_value]: " response
+    printf '%s' "${response:-$default_value}"
+  else
+    read -r -p "$label: " response
+    printf '%s' "$response"
+  fi
+}
+
+prompt_bool() {
+  local label="$1" default_value="${2:-false}" response=""
+  local hint="y/N"
+  if [[ "$default_value" == "true" ]]; then
+    hint="Y/n"
+  fi
+  read -r -p "$label [$hint]: " response
+  response="${response,,}"
+  if [[ -z "$response" ]]; then
+    printf '%s' "$default_value"
+    return 0
+  fi
+  case "$response" in
+    y|yes|true|1) printf '%s' "true" ;;
+    n|no|false|0) printf '%s' "false" ;;
+    *) die "Expected yes/no response for '$label'." ;;
+  esac
+}
+
+ensure_conf_exists() {
+  [[ "${CFG_HAS_CONF_TOML:-0}" == "1" ]] || die "conf.toml not found at ${CFG_CONFIG_FILE:-unknown}. Run the appropriate setup command first."
+}
+
+usage() {
+  cat <<'EOF'
+unpack - apply a sync pack locally or take one from Telegram
+
+Usage:
+  unpack [runtime options]
+  unpack setup
+  unpack doctor
+  unpack [unpack options] take [take options]
+  unpack take setup
+  unpack [unpack options] take [take options] doctor
+
+Configuration:
+  Uses root conf.toml.
+  Unpack settings live in [unpack].
+  Telegram source for take lives in [unpack.take.telegram].
+  Shared Telegram auth/proxy lives in [telegram.common].
+
+Commands:
+  unpack               apply a local pack using conf.toml
+  unpack setup         interactively rewrite [unpack]
+  unpack doctor        validate the base unpack configuration
+  unpack take          download the latest pack from Telegram and apply it
+  unpack take setup    interactively rewrite [unpack.take.telegram]
+  unpack take doctor   validate Telegram auth/proxy and source chat
+
+Unpack options:
+  --pack-dir PATH
+  --pack-file PATH
+  --pack-prefix PREFIX
+  --project-name NAME
+  --peer NAME
+  --ff-only 0|1
+  --force-tags 0|1
+  --prune-remote-refs 0|1
+  --prune-local-branches 0|1
+  --clean-peer-refs 0|1
+  --dry-run
+
+Take options:
+  --api-id ID
+  --api-hash HASH
+  --session PATH
+  --session-string STRING
+  --from PEER
+  --python-min VERSION
+  --proxy-type none|socks5|http|mtproto
+
+Notes:
+  Canonical CLI syntax uses --key value.
+  setup is terminal and accepts no runtime flags.
+  doctor is terminal and validates the final effective configuration after overrides.
+EOF
+}
+
+usage_take() {
+  cat <<'EOF'
+unpack take - download the latest pack from Telegram and apply it
+
+Usage:
+  unpack [unpack options] take [take options]
+  unpack take setup
+  unpack [unpack options] take [take options] doctor
+
+Configuration:
+  Uses root conf.toml.
+  Unpack settings live in [unpack].
+  Telegram source for take lives in [unpack.take.telegram].
+  Shared Telegram auth/proxy lives in [telegram.common].
+
+Unpack options:
+  --pack-dir PATH
+  --pack-file PATH
+  --pack-prefix PREFIX
+  --project-name NAME
+  --peer NAME
+  --ff-only 0|1
+  --force-tags 0|1
+  --prune-remote-refs 0|1
+  --prune-local-branches 0|1
+  --clean-peer-refs 0|1
+  --dry-run
+
+Take options:
+  --api-id ID
+  --api-hash HASH
+  --session PATH
+  --session-string STRING
+  --from PEER
+  --python-min VERSION
+  --proxy-type none|socks5|http|mtproto
+  --socks5-host HOST --socks5-port PORT [--socks5-user USER] [--socks5-password PASS]
+  --http-host HOST --http-port PORT [--http-user USER] [--http-password PASS]
+  --mtproto-host HOST --mtproto-port PORT --mtproto-secret SECRET
+EOF
+}
+
+build_unpack_args() {
+  UNPACK_ARGS=()
+  [[ -n "${CFG_UNPACK_PACK_DIR:-}" ]] && UNPACK_ARGS+=(--pack-dir "$CFG_UNPACK_PACK_DIR")
+  [[ -n "${CFG_UNPACK_PACK_PREFIX:-}" ]] && UNPACK_ARGS+=(--pack-prefix "$CFG_UNPACK_PACK_PREFIX")
+  [[ -n "${CFG_UNPACK_PROJECT_NAME:-}" ]] && UNPACK_ARGS+=(--project-name "$CFG_UNPACK_PROJECT_NAME")
+  [[ -n "${CFG_UNPACK_PEER:-}" ]] && UNPACK_ARGS+=(--peer "$CFG_UNPACK_PEER")
+  [[ -n "${CFG_UNPACK_FF_ONLY:-}" ]] && UNPACK_ARGS+=(--ff-only "$CFG_UNPACK_FF_ONLY")
+  [[ -n "${CFG_UNPACK_FORCE_TAGS:-}" ]] && UNPACK_ARGS+=(--force-tags "$CFG_UNPACK_FORCE_TAGS")
+  [[ -n "${CFG_UNPACK_PRUNE_REMOTE_REFS:-}" ]] && UNPACK_ARGS+=(--prune-remote-refs "$CFG_UNPACK_PRUNE_REMOTE_REFS")
+  [[ -n "${CFG_UNPACK_PRUNE_LOCAL_BRANCHES:-}" ]] && UNPACK_ARGS+=(--prune-local-branches "$CFG_UNPACK_PRUNE_LOCAL_BRANCHES")
+  [[ -n "${CFG_UNPACK_CLEAN_PEER_REFS:-}" ]] && UNPACK_ARGS+=(--clean-peer-refs "$CFG_UNPACK_CLEAN_PEER_REFS")
+  return 0
+}
+
+build_unpack_passthrough_args() {
+  UNPACK_PASSTHROUGH_ARGS=()
+  local -a args=("$@")
+  local i=0 arg next
+  while [[ $i -lt ${#args[@]} ]]; do
+    arg="${args[$i]}"
+    next=""
+    if [[ $((i + 1)) -lt ${#args[@]} ]]; then
+      next="${args[$((i + 1))]}"
+    fi
+    case "$arg" in
+      --pack-file)
+        UNPACK_PASSTHROUGH_ARGS+=("$arg" "$next")
+        i=$((i + 2))
+        ;;
+      --pack-file=*)
+        UNPACK_PASSTHROUGH_ARGS+=("$arg")
+        i=$((i + 1))
+        ;;
+      --dry-run)
+        UNPACK_PASSTHROUGH_ARGS+=("$arg")
+        i=$((i + 1))
+        ;;
+      *)
+        i=$((i + 1))
+        ;;
+    esac
+  done
+}
+
+append_unpack_take_telegram_args() {
+  local -n _args_ref="$1"
+  [[ -n "${CFG_TELEGRAM_COMMON_API_ID:-}" ]] && _args_ref+=(--api-id "$CFG_TELEGRAM_COMMON_API_ID")
+  [[ -n "${CFG_TELEGRAM_COMMON_API_HASH:-}" ]] && _args_ref+=(--api-hash "$CFG_TELEGRAM_COMMON_API_HASH")
+  [[ -n "${CFG_TELEGRAM_COMMON_SESSION:-}" ]] && _args_ref+=(--session "$CFG_TELEGRAM_COMMON_SESSION")
+  [[ -n "${CFG_TELEGRAM_COMMON_SESSION_STRING:-}" ]] && _args_ref+=(--session-string "$CFG_TELEGRAM_COMMON_SESSION_STRING")
+  [[ -n "${CFG_UNPACK_TAKE_TELEGRAM_FROM:-}" ]] && _args_ref+=(--from "$CFG_UNPACK_TAKE_TELEGRAM_FROM")
+  [[ -n "${CFG_TELEGRAM_COMMON_PYTHON_MIN:-}" ]] && _args_ref+=(--python-min "$CFG_TELEGRAM_COMMON_PYTHON_MIN")
+  _args_ref+=(--proxy-type "${CFG_TELEGRAM_PROXY_MODE:-none}")
+  case "${CFG_TELEGRAM_PROXY_MODE:-none}" in
+    socks5)
+      _args_ref+=(--socks5-host "${CFG_TELEGRAM_PROXY_HOST:-}" --socks5-port "${CFG_TELEGRAM_PROXY_PORT:-}")
+      [[ -n "${CFG_TELEGRAM_PROXY_USERNAME:-}" ]] && _args_ref+=(--socks5-user "$CFG_TELEGRAM_PROXY_USERNAME")
+      [[ -n "${CFG_TELEGRAM_PROXY_PASSWORD:-}" ]] && _args_ref+=(--socks5-password "$CFG_TELEGRAM_PROXY_PASSWORD")
+      ;;
+    http)
+      _args_ref+=(--http-host "${CFG_TELEGRAM_PROXY_HOST:-}" --http-port "${CFG_TELEGRAM_PROXY_PORT:-}")
+      [[ -n "${CFG_TELEGRAM_PROXY_USERNAME:-}" ]] && _args_ref+=(--http-user "$CFG_TELEGRAM_PROXY_USERNAME")
+      [[ -n "${CFG_TELEGRAM_PROXY_PASSWORD:-}" ]] && _args_ref+=(--http-password "$CFG_TELEGRAM_PROXY_PASSWORD")
+      ;;
+    mtproto)
+      _args_ref+=(--mtproto-host "${CFG_TELEGRAM_PROXY_HOST:-}" --mtproto-port "${CFG_TELEGRAM_PROXY_PORT:-}" --mtproto-secret "${CFG_TELEGRAM_PROXY_SECRET:-}")
+      ;;
+  esac
+}
+
+validate_unpack_runtime_config() {
+  ensure_conf_exists
+  [[ -n "${CFG_UNPACK_PACK_DIR:-}" ]] || die "[unpack].pack_dir is required in conf.toml. Run: unpack setup"
+  [[ -n "${CFG_UNPACK_PACK_PREFIX:-}" ]] || die "[unpack].pack_prefix is required in conf.toml. Run: unpack setup"
+  [[ -n "${CFG_UNPACK_PEER:-}" ]] || die "[unpack].peer is required in conf.toml. Run: unpack setup"
+}
+
+validate_unpack_take_config() {
+  validate_unpack_runtime_config
+  [[ -n "${CFG_UNPACK_TAKE_TELEGRAM_FROM:-}" ]] || die "[unpack.take.telegram].from is required in conf.toml. Run: unpack take setup"
+  [[ -n "${CFG_TELEGRAM_COMMON_API_ID:-}" ]] || die "[telegram.common].api_id is required in conf.toml."
+  [[ -n "${CFG_TELEGRAM_COMMON_API_HASH:-}" ]] || die "[telegram.common].api_hash is required in conf.toml."
+  if [[ -z "${CFG_TELEGRAM_COMMON_SESSION:-}" && -z "${CFG_TELEGRAM_COMMON_SESSION_STRING:-}" ]]; then
+    die "Either [telegram.common].session or [telegram.common].session_string is required in conf.toml."
+  fi
+}
+
+apply_unpack_cli_overrides() {
+  local -a args=("$@")
+  local i=0 arg next
+  while [[ $i -lt ${#args[@]} ]]; do
+    arg="${args[$i]}"
+    next=""
+    if [[ $((i + 1)) -lt ${#args[@]} ]]; then
+      next="${args[$((i + 1))]}"
+    fi
+    case "$arg" in
+      --pack-dir) CFG_UNPACK_PACK_DIR="$next"; i=$((i + 2));;
+      --pack-dir=*) CFG_UNPACK_PACK_DIR="${arg#*=}"; i=$((i + 1));;
+      --pack-prefix) CFG_UNPACK_PACK_PREFIX="$next"; i=$((i + 2));;
+      --pack-prefix=*) CFG_UNPACK_PACK_PREFIX="${arg#*=}"; i=$((i + 1));;
+      --project-name) CFG_UNPACK_PROJECT_NAME="$next"; i=$((i + 2));;
+      --project-name=*) CFG_UNPACK_PROJECT_NAME="${arg#*=}"; i=$((i + 1));;
+      --peer) CFG_UNPACK_PEER="$next"; i=$((i + 2));;
+      --peer=*) CFG_UNPACK_PEER="${arg#*=}"; i=$((i + 1));;
+      *) i=$((i + 1));;
+    esac
+  done
+}
+
+apply_unpack_take_cli_overrides() {
+  local -a args=("$@")
+  local i=0 arg next
+  while [[ $i -lt ${#args[@]} ]]; do
+    arg="${args[$i]}"
+    next=""
+    if [[ $((i + 1)) -lt ${#args[@]} ]]; then
+      next="${args[$((i + 1))]}"
+    fi
+    case "$arg" in
+      --api-id) CFG_TELEGRAM_COMMON_API_ID="$next"; i=$((i + 2));;
+      --api-id=*) CFG_TELEGRAM_COMMON_API_ID="${arg#*=}"; i=$((i + 1));;
+      --api-hash) CFG_TELEGRAM_COMMON_API_HASH="$next"; i=$((i + 2));;
+      --api-hash=*) CFG_TELEGRAM_COMMON_API_HASH="${arg#*=}"; i=$((i + 1));;
+      --session) CFG_TELEGRAM_COMMON_SESSION="$next"; i=$((i + 2));;
+      --session=*) CFG_TELEGRAM_COMMON_SESSION="${arg#*=}"; i=$((i + 1));;
+      --session-string) CFG_TELEGRAM_COMMON_SESSION_STRING="$next"; i=$((i + 2));;
+      --session-string=*) CFG_TELEGRAM_COMMON_SESSION_STRING="${arg#*=}"; i=$((i + 1));;
+      --from) CFG_UNPACK_TAKE_TELEGRAM_FROM="$next"; i=$((i + 2));;
+      --from=*) CFG_UNPACK_TAKE_TELEGRAM_FROM="${arg#*=}"; i=$((i + 1));;
+      --python-min) CFG_TELEGRAM_COMMON_PYTHON_MIN="$next"; i=$((i + 2));;
+      --python-min=*) CFG_TELEGRAM_COMMON_PYTHON_MIN="${arg#*=}"; i=$((i + 1));;
+      --proxy-type)
+        CFG_TELEGRAM_PROXY_MODE="$next"
+        CFG_TELEGRAM_PROXY_HOST=""
+        CFG_TELEGRAM_PROXY_PORT=""
+        CFG_TELEGRAM_PROXY_USERNAME=""
+        CFG_TELEGRAM_PROXY_PASSWORD=""
+        CFG_TELEGRAM_PROXY_SECRET=""
+        i=$((i + 2))
+        ;;
+      --proxy-type=*)
+        CFG_TELEGRAM_PROXY_MODE="${arg#*=}"
+        CFG_TELEGRAM_PROXY_HOST=""
+        CFG_TELEGRAM_PROXY_PORT=""
+        CFG_TELEGRAM_PROXY_USERNAME=""
+        CFG_TELEGRAM_PROXY_PASSWORD=""
+        CFG_TELEGRAM_PROXY_SECRET=""
+        i=$((i + 1))
+        ;;
+      --socks5-host) CFG_TELEGRAM_PROXY_HOST="$next"; i=$((i + 2));;
+      --socks5-host=*) CFG_TELEGRAM_PROXY_HOST="${arg#*=}"; i=$((i + 1));;
+      --socks5-port) CFG_TELEGRAM_PROXY_PORT="$next"; i=$((i + 2));;
+      --socks5-port=*) CFG_TELEGRAM_PROXY_PORT="${arg#*=}"; i=$((i + 1));;
+      --socks5-user) CFG_TELEGRAM_PROXY_USERNAME="$next"; i=$((i + 2));;
+      --socks5-user=*) CFG_TELEGRAM_PROXY_USERNAME="${arg#*=}"; i=$((i + 1));;
+      --socks5-password) CFG_TELEGRAM_PROXY_PASSWORD="$next"; i=$((i + 2));;
+      --socks5-password=*) CFG_TELEGRAM_PROXY_PASSWORD="${arg#*=}"; i=$((i + 1));;
+      --http-host) CFG_TELEGRAM_PROXY_HOST="$next"; i=$((i + 2));;
+      --http-host=*) CFG_TELEGRAM_PROXY_HOST="${arg#*=}"; i=$((i + 1));;
+      --http-port) CFG_TELEGRAM_PROXY_PORT="$next"; i=$((i + 2));;
+      --http-port=*) CFG_TELEGRAM_PROXY_PORT="${arg#*=}"; i=$((i + 1));;
+      --http-user) CFG_TELEGRAM_PROXY_USERNAME="$next"; i=$((i + 2));;
+      --http-user=*) CFG_TELEGRAM_PROXY_USERNAME="${arg#*=}"; i=$((i + 1));;
+      --http-password) CFG_TELEGRAM_PROXY_PASSWORD="$next"; i=$((i + 2));;
+      --http-password=*) CFG_TELEGRAM_PROXY_PASSWORD="${arg#*=}"; i=$((i + 1));;
+      --mtproto-host) CFG_TELEGRAM_PROXY_HOST="$next"; i=$((i + 2));;
+      --mtproto-host=*) CFG_TELEGRAM_PROXY_HOST="${arg#*=}"; i=$((i + 1));;
+      --mtproto-port) CFG_TELEGRAM_PROXY_PORT="$next"; i=$((i + 2));;
+      --mtproto-port=*) CFG_TELEGRAM_PROXY_PORT="${arg#*=}"; i=$((i + 1));;
+      --mtproto-secret) CFG_TELEGRAM_PROXY_SECRET="$next"; i=$((i + 2));;
+      --mtproto-secret=*) CFG_TELEGRAM_PROXY_SECRET="${arg#*=}"; i=$((i + 1));;
+      *) i=$((i + 1));;
+    esac
+  done
+}
+
+run_unpack_setup() {
+  load_conf_export "unpack-setup"
+  local pack_dir pack_prefix project_name peer ff_only force_tags prune_remote_refs prune_local_branches clean_peer_refs
+  pack_dir="$(prompt_default "unpack.pack_dir" "${CFG_UNPACK_PACK_DIR:-$HOME/syncpacks}")"
+  [[ -n "$pack_dir" ]] || die "unpack.pack_dir cannot be empty."
+  pack_prefix="$(prompt_default "unpack.pack_prefix" "${CFG_UNPACK_PACK_PREFIX:-syncpack}")"
+  [[ -n "$pack_prefix" ]] || die "unpack.pack_prefix cannot be empty."
+  project_name="$(prompt_default "unpack.project_name" "${CFG_UNPACK_PROJECT_NAME:-}")"
+  peer="$(prompt_default "unpack.peer" "${CFG_UNPACK_PEER:-sync}")"
+  [[ -n "$peer" ]] || die "unpack.peer cannot be empty."
+  ff_only="$(prompt_bool "unpack.ff_only" "$([[ "${CFG_UNPACK_FF_ONLY:-1}" == "1" ]] && printf true || printf false)")"
+  force_tags="$(prompt_bool "unpack.force_tags" "$([[ "${CFG_UNPACK_FORCE_TAGS:-0}" == "1" ]] && printf true || printf false)")"
+  prune_remote_refs="$(prompt_bool "unpack.prune_remote_refs" "$([[ "${CFG_UNPACK_PRUNE_REMOTE_REFS:-1}" == "1" ]] && printf true || printf false)")"
+  prune_local_branches="$(prompt_bool "unpack.prune_local_branches" "$([[ "${CFG_UNPACK_PRUNE_LOCAL_BRANCHES:-0}" == "1" ]] && printf true || printf false)")"
+  clean_peer_refs="$(prompt_bool "unpack.clean_peer_refs" "$([[ "${CFG_UNPACK_CLEAN_PEER_REFS:-1}" == "1" ]] && printf true || printf false)")"
+
+  local -a set_args
+  set_args=(
+    --set "pack_dir=$pack_dir"
+    --set "pack_prefix=$pack_prefix"
+    --set "project_name=$project_name"
+    --set "peer=$peer"
+    --set "ff_only=$ff_only"
+    --set "force_tags=$force_tags"
+    --set "prune_remote_refs=$prune_remote_refs"
+    --set "prune_local_branches=$prune_local_branches"
+    --set "clean_peer_refs=$clean_peer_refs"
+  )
+  update_table "${CFG_CONFIG_FILE}" "unpack" "${set_args[@]}"
+  printf '[APP] Updated %s [unpack]\n' "$CFG_CONFIG_FILE"
+}
+
+run_unpack_take_setup() {
+  load_conf_export "unpack-take-setup"
+  local from_value
+  from_value="$(prompt_default "unpack.take.telegram.from" "${CFG_UNPACK_TAKE_TELEGRAM_FROM:-}")"
+  [[ -n "$from_value" ]] || die "unpack.take.telegram.from cannot be empty."
+  update_table "${CFG_CONFIG_FILE}" "unpack.take.telegram" --set "from=$from_value"
+  printf '[APP] Updated %s [unpack.take.telegram]\n' "$CFG_CONFIG_FILE"
+}
+
+run_unpack_doctor() {
+  load_conf_export "unpack-doctor"
+  apply_unpack_cli_overrides "$@"
+  validate_unpack_runtime_config
+  build_unpack_args
+  build_unpack_passthrough_args "$@"
+  "$runner" "${UNPACK_ARGS[@]}" "${UNPACK_PASSTHROUGH_ARGS[@]}" --dry-run >/dev/null
+  printf '[APP] unpack doctor: base configuration looks valid.\n'
+}
+
+run_unpack_take_doctor() {
+  load_conf_export "unpack-take-doctor"
+  apply_unpack_cli_overrides "$@"
+  apply_unpack_take_cli_overrides "$@"
+  validate_unpack_take_config
+  build_unpack_args
+  build_unpack_passthrough_args "$@"
+  "$runner" "${UNPACK_ARGS[@]}" "${UNPACK_PASSTHROUGH_ARGS[@]}" --dry-run >/dev/null
+  local tg_args=()
+  append_unpack_take_telegram_args tg_args
+  "$runner" --telegram-doctor "${tg_args[@]}" >/dev/null
+  printf '[APP] unpack take doctor: configuration and Telegram prerequisites look healthy.\n'
+}
+
+run_unpack() {
+  load_conf_export "unpack"
+  apply_unpack_cli_overrides "$@"
+  validate_unpack_runtime_config
+  build_unpack_args
+  build_unpack_passthrough_args "$@"
+  "$runner" "${UNPACK_ARGS[@]}" "${UNPACK_PASSTHROUGH_ARGS[@]}"
+}
+
+run_unpack_take() {
+  load_conf_export "unpack-take"
+  apply_unpack_cli_overrides "$@"
+  apply_unpack_take_cli_overrides "$@"
+  validate_unpack_take_config
+  build_unpack_args
+  build_unpack_passthrough_args "$@"
+  local tg_args=()
+  append_unpack_take_telegram_args tg_args
+  "$runner" "${UNPACK_ARGS[@]}" "${UNPACK_PASSTHROUGH_ARGS[@]}" take "${tg_args[@]}"
+}
+
+option_name() {
+  local token="$1"
+  if [[ "$token" == *=* ]]; then
+    printf '%s' "${token%%=*}"
+  else
+    printf '%s' "$token"
+  fi
+}
+
+die_doctor_trailing() {
+  local next="${1:-}"
+  if [[ "$next" == -* ]]; then
+    die "doctor does not accept options after the 'doctor' token"
+  fi
+  die "doctor does not accept trailing subcommands"
+}
+
+consume_unpack_zone_token() {
+  local token="$1" next="${2:-}"
+  case "$token" in
+    --pack-dir|--pack-prefix|--project-name|--peer|--ff-only|--force-tags|--prune-remote-refs|--prune-local-branches|--clean-peer-refs|--pack-file)
+      [[ -n "$next" ]] || die "Missing value for $token"
+      UNPACK_ZONE_ARGS+=("$token" "$next")
+      UNPACK_PARSE_CONSUMED=2
+      ;;
+    --pack-dir=*|--pack-prefix=*|--project-name=*|--peer=*|--ff-only=*|--force-tags=*|--prune-remote-refs=*|--prune-local-branches=*|--clean-peer-refs=*|--pack-file=*)
+      UNPACK_ZONE_ARGS+=("$token")
+      UNPACK_PARSE_CONSUMED=1
+      ;;
+    --dry-run)
+      UNPACK_ZONE_ARGS+=("$token")
+      UNPACK_PARSE_CONSUMED=1
+      ;;
+    --api-id|--api-id=*|--api-hash|--api-hash=*|--session|--session=*|--session-string|--session-string=*|--from|--from=*|--python-min|--python-min=*|--proxy-type|--proxy-type=*|--socks5-host|--socks5-host=*|--socks5-port|--socks5-port=*|--socks5-user|--socks5-user=*|--socks5-password|--socks5-password=*|--http-host|--http-host=*|--http-port|--http-port=*|--http-user|--http-user=*|--http-password|--http-password=*|--mtproto-host|--mtproto-host=*|--mtproto-port|--mtproto-port=*|--mtproto-secret|--mtproto-secret=*)
+      die "$(option_name "$token") is only valid for 'unpack take'"
+      ;;
+    --*|-*)
+      die "Unknown option: $token (use --help)"
+      ;;
+    *)
+      die "Unknown subcommand: $token (use --help)"
+      ;;
+  esac
+}
+
+consume_take_zone_token() {
+  local token="$1" next="${2:-}"
+  case "$token" in
+    --api-id|--api-hash|--session|--session-string|--from|--python-min|--proxy-type|--socks5-host|--socks5-port|--socks5-user|--socks5-password|--http-host|--http-port|--http-user|--http-password|--mtproto-host|--mtproto-port|--mtproto-secret)
+      [[ -n "$next" ]] || die "Missing value for $token"
+      TAKE_ZONE_ARGS+=("$token" "$next")
+      UNPACK_PARSE_CONSUMED=2
+      ;;
+    --api-id=*|--api-hash=*|--session=*|--session-string=*|--from=*|--python-min=*|--proxy-type=*|--socks5-host=*|--socks5-port=*|--socks5-user=*|--socks5-password=*|--http-host=*|--http-port=*|--http-user=*|--http-password=*|--mtproto-host=*|--mtproto-port=*|--mtproto-secret=*)
+      TAKE_ZONE_ARGS+=("$token")
+      UNPACK_PARSE_CONSUMED=1
+      ;;
+    --pack-dir|--pack-dir=*|--pack-prefix|--pack-prefix=*|--project-name|--project-name=*|--peer|--peer=*|--ff-only|--ff-only=*|--force-tags|--force-tags=*|--prune-remote-refs|--prune-remote-refs=*|--prune-local-branches|--prune-local-branches=*|--clean-peer-refs|--clean-peer-refs=*|--pack-file|--pack-file=*|--dry-run)
+      die "$(option_name "$token") is only valid for 'unpack'"
+      ;;
+    --*|-*)
+      die "Unknown option: $token (use --help)"
+      ;;
+    *)
+      die "Unknown subcommand: $token (use --help)"
+      ;;
+  esac
+}
+
+parse_unpack_cli() {
+  UNPACK_ACTION="run_unpack"
+  UNPACK_ZONE_ARGS=()
+  TAKE_ZONE_ARGS=()
+  local zone="unpack"
+
+  while [[ $# -gt 0 ]]; do
+    if [[ "$zone" == "unpack" ]]; then
+      case "$1" in
+        --help|-h)
+          shift
+          [[ $# -eq 0 ]] || die "Unknown option: --help (use --help)"
+          UNPACK_ACTION="show_help"
+          return 0
+          ;;
+        pull)
+          die "unpack pull was removed; use unpack take"
+          ;;
+        setup)
+          [[ ${#UNPACK_ZONE_ARGS[@]} -eq 0 ]] || die "setup does not accept runtime options"
+          shift
+          [[ $# -eq 0 ]] || die "setup does not accept trailing subcommands"
+          UNPACK_ACTION="run_unpack_setup"
+          return 0
+          ;;
+        doctor)
+          shift
+          [[ $# -eq 0 ]] || die_doctor_trailing "${1:-}"
+          UNPACK_ACTION="run_unpack_doctor"
+          return 0
+          ;;
+        take)
+          shift
+          zone="take"
+          continue
+          ;;
+        *)
+          consume_unpack_zone_token "$@"
+          shift "$UNPACK_PARSE_CONSUMED"
+          ;;
+      esac
+    else
+      case "$1" in
+        --help|-h)
+          shift
+          [[ ${#TAKE_ZONE_ARGS[@]} -eq 0 && $# -eq 0 ]] || die "Unknown option: --help (use --help)"
+          UNPACK_ACTION="show_take_help"
+          return 0
+          ;;
+        setup)
+          [[ ${#UNPACK_ZONE_ARGS[@]} -eq 0 && ${#TAKE_ZONE_ARGS[@]} -eq 0 ]] || die "setup does not accept runtime options"
+          shift
+          [[ $# -eq 0 ]] || die "setup does not accept trailing subcommands"
+          UNPACK_ACTION="run_unpack_take_setup"
+          return 0
+          ;;
+        doctor)
+          shift
+          [[ $# -eq 0 ]] || die_doctor_trailing "${1:-}"
+          UNPACK_ACTION="run_unpack_take_doctor"
+          return 0
+          ;;
+        *)
+          consume_take_zone_token "$@"
+          shift "$UNPACK_PARSE_CONSUMED"
+          ;;
+      esac
+    fi
+  done
+
+  if [[ "$zone" == "take" ]]; then
+    UNPACK_ACTION="run_unpack_take"
+  fi
+}
+
+pick_config_python
+parse_unpack_cli "$@"
+
+case "$UNPACK_ACTION" in
+  show_help)
+    usage
+    ;;
+  show_take_help)
+    usage_take
+    ;;
+  run_unpack_setup)
+    run_unpack_setup
+    ;;
+  run_unpack_doctor)
+    run_unpack_doctor "${UNPACK_ZONE_ARGS[@]}"
+    ;;
+  run_unpack_take_setup)
+    run_unpack_take_setup
+    ;;
+  run_unpack_take_doctor)
+    run_unpack_take_doctor "${UNPACK_ZONE_ARGS[@]}" "${TAKE_ZONE_ARGS[@]}"
+    ;;
+  run_unpack_take)
+    run_unpack_take "${UNPACK_ZONE_ARGS[@]}" "${TAKE_ZONE_ARGS[@]}"
+    ;;
+  run_unpack)
+    run_unpack "${UNPACK_ZONE_ARGS[@]}"
+    ;;
+  *)
+    die "Unsupported unpack action: $UNPACK_ACTION"
+    ;;
+esac

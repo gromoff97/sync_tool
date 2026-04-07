@@ -1,1 +1,5 @@
 conf/
+conf.toml
+__pycache__/
+*.pyc
+*.session

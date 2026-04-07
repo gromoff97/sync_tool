@@ -1,0 +1,55 @@
+[pack]
+output_dir = "C:/Users/USERNAME/syncpacks"
+pack_prefix = "syncpack"
+machine_name = ""
+remote_name = "origin"
+## absent => no update
+## -1     => update only existing local branches
+## >0     => update local branches and include recent remote branches from last N days
+# update = -1
+
+[pack.send.telegram]
+to = "https://t.me/your-destination"
+
+[unpack]
+pack_dir = "C:/Users/USERNAME/syncpacks"
+pack_prefix = "syncpack"
+project_name = ""
+peer = "sync"
+ff_only = true
+force_tags = false
+prune_remote_refs = true
+prune_local_branches = false
+clean_peer_refs = true
+
+[unpack.take.telegram]
+from = "https://t.me/your-source"
+
+[telegram.common]
+api_id = 123456
+api_hash = "replace_me"
+session = "C:/Users/USERNAME/.sync_tool_telegram"
+session_string = ""
+phone = "+70000000000"
+ack_scan_limit = 32
+caption = ""
+python_min = "3.8"
+
+# Choose at most one proxy block.
+#
+#[telegram.common.proxy.socks5]
+#host = "127.0.0.1"
+#port = 1080
+#username = ""
+#password = ""
+#
+#[telegram.common.proxy.http]
+#host = "proxy.example.com"
+#port = 8080
+#username = ""
+#password = ""
+#
+#[telegram.common.proxy.mtproto]
+#host = "mtproxy.example.com"
+#port = 443
+#secret = "0123456789abcdef0123456789abcdef"

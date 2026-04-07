@@ -2,4 +2,652 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$script_dir/src/pack.sh" "$@"
+runner="$script_dir/src/pack.sh"
+root_helper="$script_dir/src/root_config.py"
+
+die() {
+  printf '[ERR] %s\n' "$*" >&2
+  exit 1
+}
+
+pick_config_python() {
+  if command -v python3 >/dev/null 2>&1; then
+    CONFIG_PY=(python3)
+  elif command -v python >/dev/null 2>&1; then
+    CONFIG_PY=(python)
+  elif command -v py >/dev/null 2>&1; then
+    CONFIG_PY=(py -3)
+  else
+    die "Python is required to read conf.toml."
+  fi
+}
+
+load_conf_export() {
+  local scope="$1"
+  local cwd git_top output
+  cwd="$(pwd)"
+  git_top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  output="$("${CONFIG_PY[@]}" "$root_helper" export --command "$scope" --cwd "$cwd" --git-top-level "$git_top")" \
+    || die "Failed to read conf.toml for scope '$scope'."
+  eval "$output"
+}
+
+update_table() {
+  local config_file="$1" table="$2"
+  shift 2
+  "${CONFIG_PY[@]}" "$root_helper" update-table --config-file "$config_file" --table "$table" "$@"
+}
+
+prompt_default() {
+  local label="$1" default_value="${2:-}" response=""
+  if [[ -n "$default_value" ]]; then
+    read -r -p "$label [$default_value]: " response
+    printf '%s' "${response:-$default_value}"
+  else
+    read -r -p "$label: " response
+    printf '%s' "$response"
+  fi
+}
+
+prompt_bool() {
+  local label="$1" default_value="${2:-false}" response=""
+  local hint="y/N"
+  if [[ "$default_value" == "true" ]]; then
+    hint="Y/n"
+  fi
+  read -r -p "$label [$hint]: " response
+  response="${response,,}"
+  if [[ -z "$response" ]]; then
+    printf '%s' "$default_value"
+    return 0
+  fi
+  case "$response" in
+    y|yes|true|1) printf '%s' "true" ;;
+    n|no|false|0) printf '%s' "false" ;;
+    *) die "Expected yes/no response for '$label'." ;;
+  esac
+}
+
+ensure_conf_exists() {
+  [[ "${CFG_HAS_CONF_TOML:-0}" == "1" ]] || die "conf.toml not found at ${CFG_CONFIG_FILE:-unknown}. Run the appropriate setup command first."
+}
+
+usage() {
+  cat <<'EOF'
+pack - create and optionally send a sync pack
+
+Usage:
+  pack [runtime options]
+  pack setup
+  pack doctor
+  pack [pack options] send [send options]
+  pack send setup
+  pack [pack options] send [send options] doctor
+
+Configuration:
+  Uses root conf.toml.
+  Pack settings live in [pack].
+  Telegram target for send lives in [pack.send.telegram].
+  Shared Telegram auth/proxy lives in [telegram.common].
+
+Commands:
+  pack                 create a local archive using conf.toml
+  pack setup           interactively rewrite [pack]
+  pack doctor          validate [pack] and run a dry-run of pack creation
+  pack send            create and send the archive via Telegram
+  pack send setup      interactively rewrite [pack.send.telegram]
+  pack send doctor     validate Telegram auth/proxy and target chat
+
+Pack options:
+  --output-dir PATH
+  --pack-prefix PREFIX
+  --machine-name NAME
+  --remote NAME
+  -u, --update [N]
+  --branch NAME
+  --branches LIST
+  --with-tags 0|1
+  --dry-run
+
+Send options:
+  --api-id ID
+  --api-hash HASH
+  --session PATH
+  --session-string STRING
+  --to PEER
+  --ack-scan-limit N
+  --caption TEXT
+  --python-min VERSION
+  --proxy-type none|socks5|http|mtproto
+  --socks5-host HOST --socks5-port PORT [--socks5-user USER] [--socks5-password PASS]
+  --http-host HOST --http-port PORT [--http-user USER] [--http-password PASS]
+  --mtproto-host HOST --mtproto-port PORT --mtproto-secret SECRET
+
+Notes:
+  Canonical CLI syntax uses --key value.
+  setup is terminal and accepts no runtime flags.
+  doctor is terminal and validates the final effective configuration after overrides.
+EOF
+}
+
+usage_send() {
+  cat <<'EOF'
+pack send - create and send a sync pack via Telegram
+
+Usage:
+  pack [pack options] send [send options]
+  pack send setup
+  pack [pack options] send [send options] doctor
+
+Configuration:
+  Uses root conf.toml.
+  Pack settings live in [pack].
+  Telegram target for send lives in [pack.send.telegram].
+  Shared Telegram auth/proxy lives in [telegram.common].
+
+Pack options:
+  --output-dir PATH
+  --pack-prefix PREFIX
+  --machine-name NAME
+  --remote NAME
+  -u, --update [N]
+  --branch NAME
+  --branches LIST
+  --with-tags 0|1
+  --dry-run
+
+Send options:
+  --api-id ID
+  --api-hash HASH
+  --session PATH
+  --session-string STRING
+  --to PEER
+  --ack-scan-limit N
+  --caption TEXT
+  --python-min VERSION
+  --proxy-type none|socks5|http|mtproto
+  --socks5-host HOST --socks5-port PORT [--socks5-user USER] [--socks5-password PASS]
+  --http-host HOST --http-port PORT [--http-user USER] [--http-password PASS]
+  --mtproto-host HOST --mtproto-port PORT --mtproto-secret SECRET
+EOF
+}
+
+build_pack_args() {
+  PACK_ARGS=()
+  [[ -n "${CFG_PACK_OUTPUT_DIR:-}" ]] && PACK_ARGS+=(--output-dir "$CFG_PACK_OUTPUT_DIR")
+  [[ -n "${CFG_PACK_PACK_PREFIX:-}" ]] && PACK_ARGS+=(--pack-prefix "$CFG_PACK_PACK_PREFIX")
+  [[ -n "${CFG_PACK_MACHINE_NAME:-}" ]] && PACK_ARGS+=(--machine-name "$CFG_PACK_MACHINE_NAME")
+  [[ -n "${CFG_PACK_REMOTE_NAME:-}" ]] && PACK_ARGS+=(--remote "$CFG_PACK_REMOTE_NAME")
+  if [[ -n "${CFG_PACK_UPDATE:-}" ]]; then
+    PACK_ARGS+=(--update "$CFG_PACK_UPDATE")
+  fi
+  return 0
+}
+
+build_pack_passthrough_args() {
+  PACK_PASSTHROUGH_ARGS=()
+  local -a args=("$@")
+  local i=0 arg next
+  while [[ $i -lt ${#args[@]} ]]; do
+    arg="${args[$i]}"
+    next=""
+    if [[ $((i + 1)) -lt ${#args[@]} ]]; then
+      next="${args[$((i + 1))]}"
+    fi
+    case "$arg" in
+      --branch|--branches|--with-tags)
+        PACK_PASSTHROUGH_ARGS+=("$arg" "$next")
+        i=$((i + 2))
+        ;;
+      --branch=*|--branches=*|--with-tags=*)
+        PACK_PASSTHROUGH_ARGS+=("$arg")
+        i=$((i + 1))
+        ;;
+      --dry-run)
+        PACK_PASSTHROUGH_ARGS+=("$arg")
+        i=$((i + 1))
+        ;;
+      *)
+        i=$((i + 1))
+        ;;
+    esac
+  done
+}
+
+append_pack_send_telegram_args() {
+  local -n _args_ref="$1"
+  [[ -n "${CFG_TELEGRAM_COMMON_API_ID:-}" ]] && _args_ref+=(--api-id "$CFG_TELEGRAM_COMMON_API_ID")
+  [[ -n "${CFG_TELEGRAM_COMMON_API_HASH:-}" ]] && _args_ref+=(--api-hash "$CFG_TELEGRAM_COMMON_API_HASH")
+  [[ -n "${CFG_TELEGRAM_COMMON_SESSION:-}" ]] && _args_ref+=(--session "$CFG_TELEGRAM_COMMON_SESSION")
+  [[ -n "${CFG_TELEGRAM_COMMON_SESSION_STRING:-}" ]] && _args_ref+=(--session-string "$CFG_TELEGRAM_COMMON_SESSION_STRING")
+  [[ -n "${CFG_PACK_SEND_TELEGRAM_TO:-}" ]] && _args_ref+=(--to "$CFG_PACK_SEND_TELEGRAM_TO")
+  [[ -n "${CFG_TELEGRAM_COMMON_ACK_SCAN_LIMIT:-}" ]] && _args_ref+=(--ack-scan-limit "$CFG_TELEGRAM_COMMON_ACK_SCAN_LIMIT")
+  [[ -n "${CFG_TELEGRAM_COMMON_CAPTION:-}" ]] && _args_ref+=(--caption "$CFG_TELEGRAM_COMMON_CAPTION")
+  [[ -n "${CFG_TELEGRAM_COMMON_PYTHON_MIN:-}" ]] && _args_ref+=(--python-min "$CFG_TELEGRAM_COMMON_PYTHON_MIN")
+  _args_ref+=(--proxy-type "${CFG_TELEGRAM_PROXY_MODE:-none}")
+  case "${CFG_TELEGRAM_PROXY_MODE:-none}" in
+    socks5)
+      _args_ref+=(--socks5-host "${CFG_TELEGRAM_PROXY_HOST:-}" --socks5-port "${CFG_TELEGRAM_PROXY_PORT:-}")
+      [[ -n "${CFG_TELEGRAM_PROXY_USERNAME:-}" ]] && _args_ref+=(--socks5-user "$CFG_TELEGRAM_PROXY_USERNAME")
+      [[ -n "${CFG_TELEGRAM_PROXY_PASSWORD:-}" ]] && _args_ref+=(--socks5-password "$CFG_TELEGRAM_PROXY_PASSWORD")
+      ;;
+    http)
+      _args_ref+=(--http-host "${CFG_TELEGRAM_PROXY_HOST:-}" --http-port "${CFG_TELEGRAM_PROXY_PORT:-}")
+      [[ -n "${CFG_TELEGRAM_PROXY_USERNAME:-}" ]] && _args_ref+=(--http-user "$CFG_TELEGRAM_PROXY_USERNAME")
+      [[ -n "${CFG_TELEGRAM_PROXY_PASSWORD:-}" ]] && _args_ref+=(--http-password "$CFG_TELEGRAM_PROXY_PASSWORD")
+      ;;
+    mtproto)
+      _args_ref+=(--mtproto-host "${CFG_TELEGRAM_PROXY_HOST:-}" --mtproto-port "${CFG_TELEGRAM_PROXY_PORT:-}" --mtproto-secret "${CFG_TELEGRAM_PROXY_SECRET:-}")
+      ;;
+  esac
+}
+
+validate_pack_runtime_config() {
+  ensure_conf_exists
+  [[ -n "${CFG_PACK_OUTPUT_DIR:-}" ]] || die "[pack].output_dir is required in conf.toml. Run: pack setup"
+  [[ -n "${CFG_PACK_PACK_PREFIX:-}" ]] || die "[pack].pack_prefix is required in conf.toml. Run: pack setup"
+  if [[ -n "${CFG_PACK_UPDATE:-}" ]]; then
+    [[ "${CFG_PACK_UPDATE}" =~ ^-?[0-9]+$ ]] || die "[pack].update must be an integer"
+    if (( CFG_PACK_UPDATE == 0 || CFG_PACK_UPDATE < -1 )); then
+      die "update must be -1 or a positive integer"
+    fi
+  fi
+}
+
+validate_pack_send_config() {
+  validate_pack_runtime_config
+  [[ -n "${CFG_PACK_SEND_TELEGRAM_TO:-}" ]] || die "[pack.send.telegram].to is required in conf.toml. Run: pack send setup"
+  [[ -n "${CFG_TELEGRAM_COMMON_API_ID:-}" ]] || die "[telegram.common].api_id is required in conf.toml."
+  [[ -n "${CFG_TELEGRAM_COMMON_API_HASH:-}" ]] || die "[telegram.common].api_hash is required in conf.toml."
+  if [[ -z "${CFG_TELEGRAM_COMMON_SESSION:-}" && -z "${CFG_TELEGRAM_COMMON_SESSION_STRING:-}" ]]; then
+    die "Either [telegram.common].session or [telegram.common].session_string is required in conf.toml."
+  fi
+}
+
+apply_pack_cli_overrides() {
+  local -a args=("$@")
+  local i=0 arg next
+  while [[ $i -lt ${#args[@]} ]]; do
+    arg="${args[$i]}"
+    next=""
+    if [[ $((i + 1)) -lt ${#args[@]} ]]; then
+      next="${args[$((i + 1))]}"
+    fi
+    case "$arg" in
+      --output-dir) CFG_PACK_OUTPUT_DIR="$next"; i=$((i + 2));;
+      --output-dir=*) CFG_PACK_OUTPUT_DIR="${arg#*=}"; i=$((i + 1));;
+      --pack-prefix) CFG_PACK_PACK_PREFIX="$next"; i=$((i + 2));;
+      --pack-prefix=*) CFG_PACK_PACK_PREFIX="${arg#*=}"; i=$((i + 1));;
+      --machine-name) CFG_PACK_MACHINE_NAME="$next"; i=$((i + 2));;
+      --machine-name=*) CFG_PACK_MACHINE_NAME="${arg#*=}"; i=$((i + 1));;
+      --update) CFG_PACK_UPDATE="$next"; i=$((i + 2));;
+      --update=*) CFG_PACK_UPDATE="${arg#*=}"; i=$((i + 1));;
+      --remote) CFG_PACK_REMOTE_NAME="$next"; i=$((i + 2));;
+      --remote=*) CFG_PACK_REMOTE_NAME="${arg#*=}"; i=$((i + 1));;
+      *) i=$((i + 1));;
+    esac
+  done
+}
+
+apply_pack_send_cli_overrides() {
+  local -a args=("$@")
+  local i=0 arg next
+  while [[ $i -lt ${#args[@]} ]]; do
+    arg="${args[$i]}"
+    next=""
+    if [[ $((i + 1)) -lt ${#args[@]} ]]; then
+      next="${args[$((i + 1))]}"
+    fi
+    case "$arg" in
+      --api-id) CFG_TELEGRAM_COMMON_API_ID="$next"; i=$((i + 2));;
+      --api-id=*) CFG_TELEGRAM_COMMON_API_ID="${arg#*=}"; i=$((i + 1));;
+      --api-hash) CFG_TELEGRAM_COMMON_API_HASH="$next"; i=$((i + 2));;
+      --api-hash=*) CFG_TELEGRAM_COMMON_API_HASH="${arg#*=}"; i=$((i + 1));;
+      --session) CFG_TELEGRAM_COMMON_SESSION="$next"; i=$((i + 2));;
+      --session=*) CFG_TELEGRAM_COMMON_SESSION="${arg#*=}"; i=$((i + 1));;
+      --session-string) CFG_TELEGRAM_COMMON_SESSION_STRING="$next"; i=$((i + 2));;
+      --session-string=*) CFG_TELEGRAM_COMMON_SESSION_STRING="${arg#*=}"; i=$((i + 1));;
+      --to) CFG_PACK_SEND_TELEGRAM_TO="$next"; i=$((i + 2));;
+      --to=*) CFG_PACK_SEND_TELEGRAM_TO="${arg#*=}"; i=$((i + 1));;
+      --ack-scan-limit) CFG_TELEGRAM_COMMON_ACK_SCAN_LIMIT="$next"; i=$((i + 2));;
+      --ack-scan-limit=*) CFG_TELEGRAM_COMMON_ACK_SCAN_LIMIT="${arg#*=}"; i=$((i + 1));;
+      --caption) CFG_TELEGRAM_COMMON_CAPTION="$next"; i=$((i + 2));;
+      --caption=*) CFG_TELEGRAM_COMMON_CAPTION="${arg#*=}"; i=$((i + 1));;
+      --python-min) CFG_TELEGRAM_COMMON_PYTHON_MIN="$next"; i=$((i + 2));;
+      --python-min=*) CFG_TELEGRAM_COMMON_PYTHON_MIN="${arg#*=}"; i=$((i + 1));;
+      --proxy-type)
+        CFG_TELEGRAM_PROXY_MODE="$next"
+        CFG_TELEGRAM_PROXY_HOST=""
+        CFG_TELEGRAM_PROXY_PORT=""
+        CFG_TELEGRAM_PROXY_USERNAME=""
+        CFG_TELEGRAM_PROXY_PASSWORD=""
+        CFG_TELEGRAM_PROXY_SECRET=""
+        i=$((i + 2))
+        ;;
+      --proxy-type=*)
+        CFG_TELEGRAM_PROXY_MODE="${arg#*=}"
+        CFG_TELEGRAM_PROXY_HOST=""
+        CFG_TELEGRAM_PROXY_PORT=""
+        CFG_TELEGRAM_PROXY_USERNAME=""
+        CFG_TELEGRAM_PROXY_PASSWORD=""
+        CFG_TELEGRAM_PROXY_SECRET=""
+        i=$((i + 1))
+        ;;
+      --socks5-host) CFG_TELEGRAM_PROXY_HOST="$next"; i=$((i + 2));;
+      --socks5-host=*) CFG_TELEGRAM_PROXY_HOST="${arg#*=}"; i=$((i + 1));;
+      --socks5-port) CFG_TELEGRAM_PROXY_PORT="$next"; i=$((i + 2));;
+      --socks5-port=*) CFG_TELEGRAM_PROXY_PORT="${arg#*=}"; i=$((i + 1));;
+      --socks5-user) CFG_TELEGRAM_PROXY_USERNAME="$next"; i=$((i + 2));;
+      --socks5-user=*) CFG_TELEGRAM_PROXY_USERNAME="${arg#*=}"; i=$((i + 1));;
+      --socks5-password) CFG_TELEGRAM_PROXY_PASSWORD="$next"; i=$((i + 2));;
+      --socks5-password=*) CFG_TELEGRAM_PROXY_PASSWORD="${arg#*=}"; i=$((i + 1));;
+      --http-host) CFG_TELEGRAM_PROXY_HOST="$next"; i=$((i + 2));;
+      --http-host=*) CFG_TELEGRAM_PROXY_HOST="${arg#*=}"; i=$((i + 1));;
+      --http-port) CFG_TELEGRAM_PROXY_PORT="$next"; i=$((i + 2));;
+      --http-port=*) CFG_TELEGRAM_PROXY_PORT="${arg#*=}"; i=$((i + 1));;
+      --http-user) CFG_TELEGRAM_PROXY_USERNAME="$next"; i=$((i + 2));;
+      --http-user=*) CFG_TELEGRAM_PROXY_USERNAME="${arg#*=}"; i=$((i + 1));;
+      --http-password) CFG_TELEGRAM_PROXY_PASSWORD="$next"; i=$((i + 2));;
+      --http-password=*) CFG_TELEGRAM_PROXY_PASSWORD="${arg#*=}"; i=$((i + 1));;
+      --mtproto-host) CFG_TELEGRAM_PROXY_HOST="$next"; i=$((i + 2));;
+      --mtproto-host=*) CFG_TELEGRAM_PROXY_HOST="${arg#*=}"; i=$((i + 1));;
+      --mtproto-port) CFG_TELEGRAM_PROXY_PORT="$next"; i=$((i + 2));;
+      --mtproto-port=*) CFG_TELEGRAM_PROXY_PORT="${arg#*=}"; i=$((i + 1));;
+      --mtproto-secret) CFG_TELEGRAM_PROXY_SECRET="$next"; i=$((i + 2));;
+      --mtproto-secret=*) CFG_TELEGRAM_PROXY_SECRET="${arg#*=}"; i=$((i + 1));;
+      *) i=$((i + 1));;
+    esac
+  done
+}
+
+run_pack_setup() {
+  load_conf_export "pack-setup"
+  local output_dir pack_prefix machine_name update_value remote_name
+  output_dir="$(prompt_default "pack.output_dir" "${CFG_PACK_OUTPUT_DIR:-$HOME/syncpacks}")"
+  [[ -n "$output_dir" ]] || die "pack.output_dir cannot be empty."
+  pack_prefix="$(prompt_default "pack.pack_prefix" "${CFG_PACK_PACK_PREFIX:-syncpack}")"
+  [[ -n "$pack_prefix" ]] || die "pack.pack_prefix cannot be empty."
+  machine_name="$(prompt_default "pack.machine_name" "${CFG_PACK_MACHINE_NAME:-}")"
+  update_value="$(prompt_default "pack.update (-1 for local branches only, positive integer for recent branches, empty to disable)" "${CFG_PACK_UPDATE:-}")"
+  remote_name="$(prompt_default "pack.remote_name" "${CFG_PACK_REMOTE_NAME:-origin}")"
+
+  local -a set_args
+  set_args=(--set "output_dir=$output_dir" --set "pack_prefix=$pack_prefix" --set "machine_name=$machine_name")
+  [[ -n "$update_value" ]] && set_args+=(--set "update=$update_value")
+  [[ -n "$remote_name" ]] && set_args+=(--set "remote_name=$remote_name")
+  update_table "${CFG_CONFIG_FILE}" "pack" "${set_args[@]}"
+  printf '[APP] Updated %s [pack]\n' "$CFG_CONFIG_FILE"
+}
+
+run_pack_send_setup() {
+  load_conf_export "pack-send-setup"
+  local to_value
+  to_value="$(prompt_default "pack.send.telegram.to" "${CFG_PACK_SEND_TELEGRAM_TO:-}")"
+  [[ -n "$to_value" ]] || die "pack.send.telegram.to cannot be empty."
+  update_table "${CFG_CONFIG_FILE}" "pack.send.telegram" --set "to=$to_value"
+  printf '[APP] Updated %s [pack.send.telegram]\n' "$CFG_CONFIG_FILE"
+}
+
+run_pack_doctor() {
+  load_conf_export "pack-doctor"
+  apply_pack_cli_overrides "$@"
+  validate_pack_runtime_config
+  build_pack_args
+  build_pack_passthrough_args "$@"
+  "$runner" "${PACK_ARGS[@]}" "${PACK_PASSTHROUGH_ARGS[@]}" --dry-run
+}
+
+run_pack_send_doctor() {
+  load_conf_export "pack-send-doctor"
+  apply_pack_cli_overrides "$@"
+  apply_pack_send_cli_overrides "$@"
+  validate_pack_send_config
+  build_pack_args
+  build_pack_passthrough_args "$@"
+  "$runner" "${PACK_ARGS[@]}" "${PACK_PASSTHROUGH_ARGS[@]}" --dry-run >/dev/null
+  local tg_args=()
+  append_pack_send_telegram_args tg_args
+  "$runner" --telegram-doctor "${tg_args[@]}" >/dev/null
+  printf '[APP] pack send doctor: Telegram connection and auth look healthy.\n'
+}
+
+run_pack() {
+  load_conf_export "pack"
+  apply_pack_cli_overrides "$@"
+  validate_pack_runtime_config
+  build_pack_args
+  build_pack_passthrough_args "$@"
+  "$runner" "${PACK_ARGS[@]}" "${PACK_PASSTHROUGH_ARGS[@]}"
+}
+
+run_pack_send() {
+  load_conf_export "pack-send"
+  apply_pack_cli_overrides "$@"
+  apply_pack_send_cli_overrides "$@"
+  validate_pack_send_config
+  build_pack_args
+  build_pack_passthrough_args "$@"
+  local tg_args=()
+  append_pack_send_telegram_args tg_args
+  "$runner" "${PACK_ARGS[@]}" "${PACK_PASSTHROUGH_ARGS[@]}" send "${tg_args[@]}"
+}
+
+option_name() {
+  local token="$1"
+  if [[ "$token" == *=* ]]; then
+    printf '%s' "${token%%=*}"
+  else
+    printf '%s' "$token"
+  fi
+}
+
+update_value_candidate() {
+  local token="${1:-}"
+  [[ "$token" =~ ^[+-]?[0-9]+$ ]]
+}
+
+validate_cli_update_value() {
+  local value="$1"
+  if [[ "$value" == "-1" ]]; then
+    return 0
+  fi
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || die "update must be -1 or a positive integer"
+}
+
+die_doctor_trailing() {
+  local next="${1:-}"
+  if [[ "$next" == -* ]]; then
+    die "doctor does not accept options after the 'doctor' token"
+  fi
+  die "doctor does not accept trailing subcommands"
+}
+
+parse_pack_update_token() {
+  local token="$1" next="${2:-}"
+  [[ "${PACK_UPDATE_SEEN:-0}" == "0" ]] || die "Repeated --update is not allowed"
+  PACK_UPDATE_SEEN="1"
+  if [[ "$token" == --update=* ]]; then
+    validate_cli_update_value "${token#*=}"
+    PACK_ZONE_ARGS+=(--update "${token#*=}")
+    PACK_PARSE_CONSUMED=1
+    return 0
+  fi
+  if [[ "$token" =~ ^-u.+$ && "$token" != "-u" ]]; then
+    die "Short option forms -u7 and -u=7 are not supported"
+  fi
+  if update_value_candidate "$next"; then
+    validate_cli_update_value "$next"
+    PACK_ZONE_ARGS+=(--update "$next")
+    PACK_PARSE_CONSUMED=2
+    return 0
+  fi
+  PACK_ZONE_ARGS+=(--update "-1")
+  PACK_PARSE_CONSUMED=1
+}
+
+consume_pack_zone_token() {
+  local token="$1" next="${2:-}" name
+  name="$(option_name "$token")"
+  case "$token" in
+    --update-remote|--update-remote=*) die "--update-remote was removed; use --update" ;;
+    --recent-days|--recent-days=*) die "--recent-days was removed; use --update N" ;;
+    -u|--update|--update=*) parse_pack_update_token "$token" "$next" ;;
+    --output-dir|--pack-prefix|--machine-name|--remote|--branch|--branches|--with-tags)
+      [[ -n "$next" ]] || die "Missing value for $token"
+      PACK_ZONE_ARGS+=("$token" "$next")
+      PACK_PARSE_CONSUMED=2
+      ;;
+    --output-dir=*|--pack-prefix=*|--machine-name=*|--remote=*|--branch=*|--branches=*|--with-tags=*)
+      PACK_ZONE_ARGS+=("$token")
+      PACK_PARSE_CONSUMED=1
+      ;;
+    --dry-run)
+      PACK_ZONE_ARGS+=("$token")
+      PACK_PARSE_CONSUMED=1
+      ;;
+    --api-id|--api-id=*|--api-hash|--api-hash=*|--session|--session=*|--session-string|--session-string=*|--to|--to=*|--ack-scan-limit|--ack-scan-limit=*|--caption|--caption=*|--python-min|--python-min=*|--proxy-type|--proxy-type=*|--socks5-host|--socks5-host=*|--socks5-port|--socks5-port=*|--socks5-user|--socks5-user=*|--socks5-password|--socks5-password=*|--http-host|--http-host=*|--http-port|--http-port=*|--http-user|--http-user=*|--http-password|--http-password=*|--mtproto-host|--mtproto-host=*|--mtproto-port|--mtproto-port=*|--mtproto-secret|--mtproto-secret=*)
+      die "$(option_name "$token") is only valid for 'pack send'"
+      ;;
+    --*|-*)
+      die "Unknown option: $token (use --help)"
+      ;;
+    *)
+      die "Unknown subcommand: $token (use --help)"
+      ;;
+  esac
+}
+
+consume_send_zone_token() {
+  local token="$1" next="${2:-}"
+  case "$token" in
+    --api-id|--api-hash|--session|--session-string|--to|--ack-scan-limit|--caption|--python-min|--proxy-type|--socks5-host|--socks5-port|--socks5-user|--socks5-password|--http-host|--http-port|--http-user|--http-password|--mtproto-host|--mtproto-port|--mtproto-secret)
+      [[ -n "$next" ]] || die "Missing value for $token"
+      SEND_ZONE_ARGS+=("$token" "$next")
+      PACK_PARSE_CONSUMED=2
+      ;;
+    --api-id=*|--api-hash=*|--session=*|--session-string=*|--to=*|--ack-scan-limit=*|--caption=*|--python-min=*|--proxy-type=*|--socks5-host=*|--socks5-port=*|--socks5-user=*|--socks5-password=*|--http-host=*|--http-port=*|--http-user=*|--http-password=*|--mtproto-host=*|--mtproto-port=*|--mtproto-secret=*)
+      SEND_ZONE_ARGS+=("$token")
+      PACK_PARSE_CONSUMED=1
+      ;;
+    -u|--update|--update=*|--output-dir|--output-dir=*|--pack-prefix|--pack-prefix=*|--machine-name|--machine-name=*|--remote|--remote=*|--branch|--branch=*|--branches|--branches=*|--with-tags|--with-tags=*|--dry-run)
+      die "$(option_name "$token") is only valid for 'pack'"
+      ;;
+    --update-remote|--update-remote=*) die "--update-remote was removed; use --update" ;;
+    --recent-days|--recent-days=*) die "--recent-days was removed; use --update N" ;;
+    --*|-*)
+      die "Unknown option: $token (use --help)"
+      ;;
+    *)
+      die "Unknown subcommand: $token (use --help)"
+      ;;
+  esac
+}
+
+parse_pack_cli() {
+  PACK_ACTION="run_pack"
+  PACK_ZONE_ARGS=()
+  SEND_ZONE_ARGS=()
+  PACK_UPDATE_SEEN="0"
+  local zone="pack"
+
+  while [[ $# -gt 0 ]]; do
+    if [[ "$zone" == "pack" ]]; then
+      case "$1" in
+        --help|-h)
+          shift
+          [[ $# -eq 0 ]] || die "Unknown option: --help (use --help)"
+          PACK_ACTION="show_help"
+          return 0
+          ;;
+        push)
+          die "pack push was removed; use pack send"
+          ;;
+        setup)
+          [[ ${#PACK_ZONE_ARGS[@]} -eq 0 ]] || die "setup does not accept runtime options"
+          shift
+          [[ $# -eq 0 ]] || die "setup does not accept trailing subcommands"
+          PACK_ACTION="run_pack_setup"
+          return 0
+          ;;
+        doctor)
+          shift
+          [[ $# -eq 0 ]] || die_doctor_trailing "${1:-}"
+          PACK_ACTION="run_pack_doctor"
+          return 0
+          ;;
+        send)
+          shift
+          zone="send"
+          continue
+          ;;
+        *)
+          consume_pack_zone_token "$@"
+          shift "$PACK_PARSE_CONSUMED"
+          ;;
+      esac
+    else
+      case "$1" in
+        --help|-h)
+          shift
+          [[ ${#SEND_ZONE_ARGS[@]} -eq 0 && $# -eq 0 ]] || die "Unknown option: --help (use --help)"
+          PACK_ACTION="show_send_help"
+          return 0
+          ;;
+        setup)
+          [[ ${#PACK_ZONE_ARGS[@]} -eq 0 && ${#SEND_ZONE_ARGS[@]} -eq 0 ]] || die "setup does not accept runtime options"
+          shift
+          [[ $# -eq 0 ]] || die "setup does not accept trailing subcommands"
+          PACK_ACTION="run_pack_send_setup"
+          return 0
+          ;;
+        doctor)
+          shift
+          [[ $# -eq 0 ]] || die_doctor_trailing "${1:-}"
+          PACK_ACTION="run_pack_send_doctor"
+          return 0
+          ;;
+        *)
+          consume_send_zone_token "$@"
+          shift "$PACK_PARSE_CONSUMED"
+          ;;
+      esac
+    fi
+  done
+
+  if [[ "$zone" == "send" ]]; then
+    PACK_ACTION="run_pack_send"
+  fi
+}
+
+pick_config_python
+parse_pack_cli "$@"
+
+case "$PACK_ACTION" in
+  show_help)
+    usage
+    ;;
+  show_send_help)
+    usage_send
+    ;;
+  run_pack_setup)
+    run_pack_setup
+    ;;
+  run_pack_doctor)
+    run_pack_doctor "${PACK_ZONE_ARGS[@]}"
+    ;;
+  run_pack_send_setup)
+    run_pack_send_setup
+    ;;
+  run_pack_send_doctor)
+    run_pack_send_doctor "${PACK_ZONE_ARGS[@]}" "${SEND_ZONE_ARGS[@]}"
+    ;;
+  run_pack_send)
+    run_pack_send "${PACK_ZONE_ARGS[@]}" "${SEND_ZONE_ARGS[@]}"
+    ;;
+  run_pack)
+    run_pack "${PACK_ZONE_ARGS[@]}"
+    ;;
+  *)
+    die "Unsupported pack action: $PACK_ACTION"
+    ;;
+esac

@@ -157,121 +157,57 @@ looks_like_placeholder() {
   [[ "$v" == REPLACE* || "$v" == *XXXXXXXX* ]]
 }
 
-expand_user_path() {
-  local p="$1"
-  local h="${HOME:-}"
-  if [[ -n "$h" && "$h" == */~ ]]; then
-    h="${h%/~}"
-  fi
-  case "$p" in
-    "~")
-      [[ -n "$h" ]] || die "HOME is not set; cannot expand '~' in config."
-      printf '%s' "$h"
+validate_telegram_proxy_mode() {
+  local cfg="${1:-runtime arguments}"
+  case "$TG_PROXY_TYPE" in
+    none)
+      [[ -z "$TG_SOCKS5_HOST$TG_SOCKS5_PORT$TG_SOCKS5_USER$TG_SOCKS5_PASSWORD$TG_HTTP_HOST$TG_HTTP_PORT$TG_HTTP_USER$TG_HTTP_PASSWORD$TG_MTPROTO_HOST$TG_MTPROTO_PORT$TG_MTPROTO_SECRET" ]] || die "Proxy keys are not allowed when telegram_proxy_type=none in $cfg"
       ;;
-    "~/"*)
-      [[ -n "$h" ]] || die "HOME is not set; cannot expand '~/' in config."
-      printf '%s' "$h/${p#~/}"
+    socks5)
+      [[ -n "$TG_SOCKS5_HOST" ]] || die "telegram_socks5_host is required when telegram_proxy_type=socks5 in $cfg"
+      [[ -n "$TG_SOCKS5_PORT" ]] || die "telegram_socks5_port is required when telegram_proxy_type=socks5 in $cfg"
+      [[ -z "$TG_HTTP_HOST$TG_HTTP_PORT$TG_HTTP_USER$TG_HTTP_PASSWORD$TG_MTPROTO_HOST$TG_MTPROTO_PORT$TG_MTPROTO_SECRET" ]] || die "telegram_http_* and telegram_mtproto_* keys are not allowed when telegram_proxy_type=socks5 in $cfg"
+      ;;
+    http)
+      [[ -n "$TG_HTTP_HOST" ]] || die "telegram_http_host is required when telegram_proxy_type=http in $cfg"
+      [[ -n "$TG_HTTP_PORT" ]] || die "telegram_http_port is required when telegram_proxy_type=http in $cfg"
+      [[ -z "$TG_SOCKS5_HOST$TG_SOCKS5_PORT$TG_SOCKS5_USER$TG_SOCKS5_PASSWORD$TG_MTPROTO_HOST$TG_MTPROTO_PORT$TG_MTPROTO_SECRET" ]] || die "telegram_socks5_* and telegram_mtproto_* keys are not allowed when telegram_proxy_type=http in $cfg"
+      ;;
+    mtproto)
+      [[ -n "$TG_MTPROTO_HOST" ]] || die "telegram_mtproto_host is required when telegram_proxy_type=mtproto in $cfg"
+      [[ -n "$TG_MTPROTO_PORT" ]] || die "telegram_mtproto_port is required when telegram_proxy_type=mtproto in $cfg"
+      [[ -n "$TG_MTPROTO_SECRET" ]] || die "telegram_mtproto_secret is required when telegram_proxy_type=mtproto in $cfg"
+      [[ -z "$TG_SOCKS5_HOST$TG_SOCKS5_PORT$TG_SOCKS5_USER$TG_SOCKS5_PASSWORD$TG_HTTP_HOST$TG_HTTP_PORT$TG_HTTP_USER$TG_HTTP_PASSWORD" ]] || die "telegram_socks5_* and telegram_http_* keys are not allowed when telegram_proxy_type=mtproto in $cfg"
       ;;
     *)
-      printf '%s' "$p"
+      die "telegram_proxy_type must be one of: none, socks5, http, mtproto in $cfg"
       ;;
   esac
 }
 
-load_config_overrides() {
-  local cfg="$1"
-  [[ -f "$cfg" ]] || return 0
-
-  local raw line key value
-  while IFS= read -r raw || [[ -n "$raw" ]]; do
-    raw="${raw%$'\r'}"
-    line="${raw%%#*}"
-    line="$(trim_ws "$line")"
-    [[ -n "$line" ]] || continue
-    [[ "$line" == *=* ]] || die "Invalid config line in $cfg: $raw"
-
-    key="$(trim_ws "${line%%=*}")"
-    value="$(trim_ws "${line#*=}")"
-    value="$(strip_quotes "$value")"
-
-    case "$key" in
-      output_dir|OUTPUT_DIR)       OUTPUT_DIR="$(expand_user_path "$value")" ;;
-      pack_prefix|PACK_PREFIX)     PACK_PREFIX="$value" ;;
-      machine_name|MACHINE_NAME)   MACHINE_NAME="$value" ;;
-      branches|BRANCHES)           BRANCHES_RAW="$value" ;;
-      branch|BRANCH)               BRANCHES_RAW="$value" ;;
-      with_tags|WITH_TAGS)         WITH_TAGS="$value" ;;
-      update_remote|UPDATE_REMOTE) UPDATE_REMOTE="$value" ;;
-      remote|REMOTE)               REMOTE_NAME="$value" ;;
-      recent_days|RECENT_DAYS)     RECENT_DAYS="$value" ;;
-      *) ;;
-    esac
-  done < "$cfg"
-}
-
-load_telegram_config() {
-  local cfg="$1"
-  TG_API_ID=""
-  TG_API_HASH=""
-  TG_TO=""
-  TG_SESSION=""
-  TG_SESSION_STRING=""
-  TG_PHONE=""
-  TG_CODE=""
-  TG_PASSWORD=""
-  TG_PROXY=""
-  TG_ACK_REQUIRED="1"
-  TG_ACK_TEXT="Closed by"
-  TG_ACK_SCAN_LIMIT="32"
-  TG_CAPTION=""
-  TG_PYTHON_MIN="3.8"
-
-  [[ -f "$cfg" ]] || return 0
-
-  local raw line key value
-  while IFS= read -r raw || [[ -n "$raw" ]]; do
-    raw="${raw%$'\r'}"
-    line="${raw%%#*}"
-    line="$(trim_ws "$line")"
-    [[ -n "$line" ]] || continue
-    [[ "$line" == *=* ]] || die "Invalid config line in $cfg: $raw"
-
-    key="$(trim_ws "${line%%=*}")"
-    value="$(trim_ws "${line#*=}")"
-    value="$(strip_quotes "$value")"
-
-    case "$key" in
-      telegram_api_id|TELEGRAM_API_ID|api_id|API_ID) TG_API_ID="$value" ;;
-      telegram_api_hash|TELEGRAM_API_HASH|api_hash|API_HASH) TG_API_HASH="$value" ;;
-      telegram_to|TELEGRAM_TO|to|TO|telegram_peer|TELEGRAM_PEER|peer|PEER) TG_TO="$value" ;;
-      telegram_session|TELEGRAM_SESSION|session|SESSION) TG_SESSION="$(expand_user_path "$value")" ;;
-      telegram_session_string|TELEGRAM_SESSION_STRING|session_string|SESSION_STRING) TG_SESSION_STRING="$value" ;;
-      telegram_phone|TELEGRAM_PHONE|phone|PHONE) TG_PHONE="$value" ;;
-      telegram_code|TELEGRAM_CODE|code|CODE) TG_CODE="$value" ;;
-      telegram_password|TELEGRAM_PASSWORD|password|PASSWORD) TG_PASSWORD="$value" ;;
-      telegram_proxy|TELEGRAM_PROXY|proxy|PROXY) TG_PROXY="$value" ;;
-      telegram_ack_scan_limit|TELEGRAM_ACK_SCAN_LIMIT|ack_scan_limit|ACK_SCAN_LIMIT) TG_ACK_SCAN_LIMIT="$value" ;;
-      telegram_caption|TELEGRAM_CAPTION|caption|CAPTION) TG_CAPTION="$value" ;;
-      telegram_python_min|TELEGRAM_PYTHON_MIN|python_min|PYTHON_MIN) TG_PYTHON_MIN="$value" ;;
-      *) ;;
-    esac
-  done < "$cfg"
-
-  if looks_like_placeholder "$TG_PROXY"; then
-    TG_PROXY=""
-  fi
-  [[ -z "$TG_API_ID" || "$TG_API_ID" =~ ^[0-9]+$ ]] || die "telegram_api_id must be an integer in $cfg"
-  [[ "$TG_PYTHON_MIN" =~ ^[0-9]+\.[0-9]+$ ]] || die "telegram_python_min must be MAJOR.MINOR in $cfg"
-  [[ "$TG_ACK_SCAN_LIMIT" =~ ^[0-9]+$ ]] || die "telegram_ack_scan_limit must be an integer in $cfg"
-}
-
 require_telegram_config() {
-  local cfg="$1"
-  [[ -f "$cfg" ]] || die "telegram.conf not found. Run: pack --mproto-login"
-  [[ -n "$TG_API_ID" ]] || die "telegram_api_id missing in $cfg. Run: pack --mproto-login"
-  [[ -n "$TG_API_HASH" ]] || die "telegram_api_hash missing in $cfg. Run: pack --mproto-login"
+  local cfg="${1:-runtime arguments}"
+  [[ -n "$TG_API_ID" ]] || die "telegram_api_id missing in $cfg. Populate [telegram.common] in conf.toml."
+  [[ -n "$TG_API_HASH" ]] || die "telegram_api_hash missing in $cfg. Populate [telegram.common] in conf.toml."
   if looks_like_placeholder "$TG_API_ID" || looks_like_placeholder "$TG_API_HASH"; then
-    die "telegram.conf has placeholder values. Run: pack --mproto-login"
+    die "Telegram config in $cfg still has placeholder values."
+  fi
+  validate_telegram_proxy_mode "$cfg"
+}
+
+append_telegram_proxy_args() {
+  local -n _cmd_ref="$1"
+  _cmd_ref+=(--proxy-type "$TG_PROXY_TYPE")
+  if [[ "$TG_PROXY_TYPE" == "socks5" ]]; then
+    _cmd_ref+=(--socks5-host "$TG_SOCKS5_HOST" --socks5-port "$TG_SOCKS5_PORT")
+    [[ -n "$TG_SOCKS5_USER" ]] && _cmd_ref+=(--socks5-user "$TG_SOCKS5_USER")
+    [[ -n "$TG_SOCKS5_PASSWORD" ]] && _cmd_ref+=(--socks5-password "$TG_SOCKS5_PASSWORD")
+  elif [[ "$TG_PROXY_TYPE" == "http" ]]; then
+    _cmd_ref+=(--http-host "$TG_HTTP_HOST" --http-port "$TG_HTTP_PORT")
+    [[ -n "$TG_HTTP_USER" ]] && _cmd_ref+=(--http-user "$TG_HTTP_USER")
+    [[ -n "$TG_HTTP_PASSWORD" ]] && _cmd_ref+=(--http-password "$TG_HTTP_PASSWORD")
+  elif [[ "$TG_PROXY_TYPE" == "mtproto" ]]; then
+    _cmd_ref+=(--mtproto-host "$TG_MTPROTO_HOST" --mtproto-port "$TG_MTPROTO_PORT" --mtproto-secret "$TG_MTPROTO_SECRET")
   fi
 }
 
@@ -285,6 +221,15 @@ python_module_available_cmd() {
   local module="$1"; shift
   local -a cmd=("$@")
   "${cmd[@]}" -c 'import importlib,sys; importlib.import_module(sys.argv[1])' "$module" >/dev/null 2>&1
+}
+
+python_proxy_support_cmd() {
+  local proxy_type="$1"; shift
+  local -a cmd=("$@")
+  if [[ "$proxy_type" != "socks5" && "$proxy_type" != "http" ]]; then
+    return 0
+  fi
+  "${cmd[@]}" -c 'import importlib.util,sys; sys.exit(0 if (importlib.util.find_spec("python_socks") or importlib.util.find_spec("socks")) else 1)' >/dev/null 2>&1
 }
 
 python_exec_path_cmd() {
@@ -355,22 +300,39 @@ fetch_recent_remote_branches() {
   local remote="$1"
   local days="$2"
   [[ -n "$remote" ]] || die "--remote is required with -u"
-  [[ -n "$days" ]] || days="180"
-  log_git "Fetch remote: $remote (recent ${days} days)"
+  if [[ -n "$days" ]]; then
+    log_git "Fetch remote: $remote (recent ${days} days)"
+  else
+    log_git "Fetch remote: $remote (existing local branches only)"
+  fi
   git -C "$REPO_DIR" fetch --prune "$remote" >/dev/null 2>&1 || die "Failed to fetch remote '$remote'"
 
-  local cutoff
-  cutoff="$(compute_cutoff_epoch_days "$days")"
-  [[ -n "$cutoff" ]] || die "Failed to compute recent cutoff."
+  if [[ -z "$days" ]]; then
+    mapfile -t recent_branches < <(git -C "$REPO_DIR" for-each-ref --format='%(refname:strip=2)' "refs/heads/*" | tr -d '\r')
+    if [[ "${#recent_branches[@]}" -eq 0 ]]; then
+      log_git "No local branches to update from remote."
+      REMOTE_RECENT_BRANCHES=()
+      REMOTE_RECENT_COUNT="0"
+      return 0
+    fi
+  else
+    local cutoff
+    cutoff="$(compute_cutoff_epoch_days "$days")"
+    [[ -n "$cutoff" ]] || die "Failed to compute recent cutoff."
 
-  mapfile -t recent_branches < <(
-    git -C "$REPO_DIR" for-each-ref --format='%(committerdate:unix) %(refname:strip=3)' "refs/remotes/$remote/" \
-      | tr -d '\r' \
-      | awk -v cutoff="$cutoff" -v r="$remote/" '$1>=cutoff {ref=$2; sub("^" r, "", ref); if(ref!="HEAD") print ref}'
-  )
+    mapfile -t recent_branches < <(
+      git -C "$REPO_DIR" for-each-ref --format='%(committerdate:unix) %(refname:strip=3)' "refs/remotes/$remote/" \
+        | tr -d '\r' \
+        | awk -v cutoff="$cutoff" -v r="$remote/" '$1>=cutoff {ref=$2; sub("^" r, "", ref); if(ref!="HEAD") print ref}'
+    )
+  fi
 
   if [[ "${#recent_branches[@]}" -eq 0 ]]; then
-    log_git "No remote branches updated in the last ${days} days."
+    if [[ -n "$days" ]]; then
+      log_git "No remote branches updated in the last ${days} days."
+    else
+      log_git "No local branches matched remote refs."
+    fi
     REMOTE_RECENT_BRANCHES=()
     REMOTE_RECENT_COUNT="0"
     return 0
@@ -483,6 +445,9 @@ select_python_for_telegram() {
         break
       fi
     done
+    if [[ "$ok" == "1" ]] && ! python_proxy_support_cmd "$TG_PROXY_TYPE" "${cmd[@]}"; then
+      ok="0"
+    fi
     if [[ "$ok" == "1" ]]; then
       PY_CMD=("${cmd[@]}")
       return 0
@@ -501,6 +466,9 @@ select_python_for_telegram() {
         break
       fi
     done
+    if [[ "$ok" == "1" ]] && ! python_proxy_support_cmd "$TG_PROXY_TYPE" "${cmd[@]}"; then
+      ok="0"
+    fi
     if [[ "$ok" == "1" ]]; then
       PY_CMD=("${cmd[@]}")
       return 0
@@ -519,6 +487,9 @@ select_python_for_telegram() {
         break
       fi
     done
+    if [[ "$ok" == "1" ]] && ! python_proxy_support_cmd "$TG_PROXY_TYPE" "${cmd[@]}"; then
+      ok="0"
+    fi
     if [[ "$ok" == "1" ]]; then
       PY_CMD=("${cmd[@]}")
       return 0
@@ -526,13 +497,16 @@ select_python_for_telegram() {
   done < <(python_candidates_from_globs)
 
   if [[ "${#required[@]}" -gt 0 ]]; then
+    if [[ "$TG_PROXY_TYPE" == "socks5" || "$TG_PROXY_TYPE" == "http" ]]; then
+      die "Python >= $min_ver with modules (${required[*]}) and transport proxy support (python-socks or PySocks) not found in PATH, py launcher list, or common install dirs."
+    fi
     die "Python >= $min_ver with modules (${required[*]}) not found in PATH, py launcher list, or common install dirs."
   fi
   die "Python >= $min_ver not found in PATH, py launcher list, or common install dirs."
 }
 
 send_to_telegram_personal() {
-  local file="$1" caption="$2" config_file="$3"
+  local file="$1" caption="$2"
   local -a py_cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -553,81 +527,21 @@ send_to_telegram_personal() {
     --api-id "$TG_API_ID"
     --api-hash "$TG_API_HASH"
     --session "$TG_SESSION"
-    --config-file "$config_file"
     --to "$TG_TO"
     --pack-prefix "$PACK_PREFIX"
     --project-name "$PROJECT_NAME"
     --file "$file"
-    --non-interactive
     --parse-mode html
   )
   if [[ "$TG_ACK_REQUIRED" == "1" ]]; then
     cmd+=(--require-ack --ack-text "$TG_ACK_TEXT" --scan-limit "$TG_ACK_SCAN_LIMIT")
   fi
-  if [[ -n "$TG_PROXY" ]]; then
-    cmd+=(--proxy "$TG_PROXY")
-  fi
+  append_telegram_proxy_args cmd
   if [[ -n "$TG_SESSION_STRING" ]]; then
     cmd+=(--session-string "$TG_SESSION_STRING")
-  fi
-  if [[ -n "$TG_PHONE" ]]; then
-    cmd+=(--phone "$TG_PHONE")
-  fi
-  if [[ -n "$TG_CODE" ]]; then
-    cmd+=(--code "$TG_CODE")
-  fi
-  if [[ -n "$TG_PASSWORD" ]]; then
-    cmd+=(--password "$TG_PASSWORD")
   fi
   if [[ -n "$caption" ]]; then
     cmd+=(--caption "$caption")
-  fi
-
-  if [[ -z "$C_RESET" ]]; then
-    NO_COLOR=1 "${cmd[@]}"
-  elif [[ "$USE_256_COLOR" == "1" ]]; then
-    FORCE_COLOR=1 FORCE_256_COLOR=1 "${cmd[@]}"
-  else
-    FORCE_COLOR=1 "${cmd[@]}"
-  fi
-}
-
-send_mproto_login() {
-  local config_file="$1"
-  local -a py_cmd
-  select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
-  py_cmd=("${PY_CMD[@]}" "-u")
-  log_pack "Telegram python: $(python_exec_path_cmd "${PY_CMD[@]}")"
-
-  local script_dir script_path
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  script_path="$script_dir/tg_send.py"
-  [[ -f "$script_path" ]] || die "Telegram sender script not found: $script_path"
-
-  local -a cmd
-  # Git Bash + Windows console Python can lose interactive prompts without winpty.
-  if have winpty && [[ -t 0 && -t 1 ]]; then
-    py_cmd=("winpty" "${py_cmd[@]}")
-  fi
-
-  cmd=("${py_cmd[@]}" "$script_path"
-    --api-id "$TG_API_ID"
-    --api-hash "$TG_API_HASH"
-    --session "$TG_SESSION"
-    --config-file "$config_file"
-    --mproto-login
-  )
-  if [[ -n "$TG_PROXY" ]]; then
-    cmd+=(--proxy "$TG_PROXY")
-  fi
-  if [[ -n "$TG_SESSION_STRING" ]]; then
-    cmd+=(--session-string "$TG_SESSION_STRING")
-  fi
-  if [[ -n "$TG_PHONE" ]]; then
-    cmd+=(--phone "$TG_PHONE")
-  fi
-  if [[ -n "$TG_TO" ]]; then
-    cmd+=(--to "$TG_TO")
   fi
 
   if [[ -z "$C_RESET" ]]; then
@@ -674,7 +588,13 @@ ensure_repo_ok_and_clean() {
   p="$(gitpath "$repo" index.lock)";        [[ ! -f "$p" ]] || die "index.lock exists. Another git process running?"
 
   local st
-  st="$(git -C "$repo" status --porcelain)"
+  st="$(git -C "$repo" status --porcelain | awk '
+    {
+      path = substr($0, 4)
+      if (path == "conf.toml" || path == "conf.example.toml") next
+      print
+    }'
+  )"
   [[ -z "$st" ]] || die "Repo has uncommitted/untracked changes. Commit/stash first."
 }
 
@@ -687,41 +607,37 @@ Options:
   --output-dir PATH        default: ~/syncpacks
   --pack-prefix PREFIX     default: syncpack
   --machine-name NAME      default: auto-detected; written to manifest only
-  -u, --update-remote      fetch recent branches from remote before pack (pack all branches)
+  -u, --update [N]         fetch remote before pack; no value updates only existing local branches, positive N includes recent remote branches
   --remote NAME            remote name (default: origin; required with -u)
-  --recent-days N          how many days back is "recent" (default: 30)
   --branch NAME            pack only this branch (no tags by default)
   --branches LIST          pack only these branches (comma-separated)
   --with-tags 0|1          include tags (default: 1 for all branches, 0 for selected branches)
   --dry-run                show what would be done without creating/sending
-  --mproto-login           interactive MTProto login + connection test, writes <tool_dir>/conf/telegram.conf
-  --list-chat TEXT         list Telegram chats containing TEXT (name or username)
   --help
 
 Subcommands:
-  push                     send archive via Telegram (see: pack push --help)
+  send                     send archive via Telegram (see: pack send --help)
 
 Config:
-  <tool_dir>/conf/pack.conf (if present) overrides pack options above.
+  Use the top-level `pack` wrapper with `conf.toml` in the repo root.
 
 Example:
   ./pack
-  ./pack push
+  ./pack send
 EOF
   exit 2
 }
 
-usage_push() {
+usage_send() {
   cat >&2 <<'EOF'
-pack push — send the created pack via Telegram (personal account)
+pack send — send the created pack via Telegram (personal account)
 
 Options (same as pack):
   --output-dir PATH        default: ~/syncpacks
   --pack-prefix PREFIX     default: syncpack
   --machine-name NAME      default: auto-detected; written to manifest only
-  -u, --update-remote      fetch recent branches from remote before pack (pack all branches)
+  -u, --update [N]         fetch remote before pack; no value updates only existing local branches, positive N includes recent remote branches
   --remote NAME            remote name (default: origin; required with -u)
-  --recent-days N          how many days back is "recent" (default: 30)
   --branch NAME            pack only this branch (no tags by default)
   --branches LIST          pack only these branches (comma-separated)
   --with-tags 0|1          include tags (default: 1 for all branches, 0 for selected branches)
@@ -729,28 +645,17 @@ Options (same as pack):
   --help
 
 Config:
-  <tool_dir>/conf/telegram.conf is required for push.
-  push is non-interactive for Telegram auth; run --mproto-login to create/refresh telegram.conf.
-  If telegram_to is missing, push will prompt for it and save for next time.
-  Supported keys:
-    telegram_api_id, telegram_api_hash, telegram_to
-    telegram_session or telegram_session_string
-    telegram_phone, telegram_code, telegram_password
-    telegram_proxy (optional, e.g. socks5://user:pass@host:1080)
-    telegram_ack_scan_limit (default: 32)
-    telegram_caption, telegram_python_min
-  Default caption: Packed by **machine_name**
-  Python modules for push: telethon, colorama
+  Use the top-level `pack send` wrapper with root `conf.toml`.
+  The internal runner expects normalized Telegram/common/proxy runtime arguments.
 
 Examples:
-  ./pack push
-  ./pack push --dry-run
+  ./pack send
+  ./pack send --dry-run
 EOF
   exit 2
 }
 
-list_telegram_chats() {
-  local config_file="$1" filter_text="$2"
+telegram_doctor() {
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -770,14 +675,10 @@ list_telegram_chats() {
     --api-id "$TG_API_ID"
     --api-hash "$TG_API_HASH"
     --session "$TG_SESSION"
-    --config-file "$config_file"
-    --list-chats
-    --chat-filter "$filter_text"
-    --non-interactive
+    --doctor
+    --to "$TG_TO"
   )
-  if [[ -n "$TG_PROXY" ]]; then
-    cmd+=(--proxy "$TG_PROXY")
-  fi
+  append_telegram_proxy_args cmd
   if [[ -n "$TG_SESSION_STRING" ]]; then
     cmd+=(--session-string "$TG_SESSION_STRING")
   fi
@@ -792,7 +693,7 @@ list_telegram_chats() {
 }
 
 check_telegram_ack() {
-  local config_file="$1" meta_file="$2" current_sha="$3"
+  local meta_file="$1" current_sha="$2"
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -812,7 +713,6 @@ check_telegram_ack() {
     --api-id "$TG_API_ID"
     --api-hash "$TG_API_HASH"
     --session "$TG_SESSION"
-    --config-file "$config_file"
     --to "$TG_TO"
     --pack-prefix "$PACK_PREFIX"
     --project-name "$PROJECT_NAME"
@@ -821,11 +721,8 @@ check_telegram_ack() {
     --check-ack
     --meta-file "$meta_file"
     --current-sha "$current_sha"
-    --non-interactive
   )
-  if [[ -n "$TG_PROXY" ]]; then
-    cmd+=(--proxy "$TG_PROXY")
-  fi
+  append_telegram_proxy_args cmd
   if [[ -n "$TG_SESSION_STRING" ]]; then
     cmd+=(--session-string "$TG_SESSION_STRING")
   fi
@@ -840,7 +737,7 @@ check_telegram_ack() {
 }
 
 send_telegram_close() {
-  local config_file="$1" msg_id="$2" reason="$3"
+  local msg_id="$1" reason="$2"
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -863,16 +760,12 @@ send_telegram_close() {
     --api-id "$TG_API_ID"
     --api-hash "$TG_API_HASH"
     --session "$TG_SESSION"
-    --config-file "$config_file"
     --to "$TG_TO"
     --text "$text"
     --reply-to "$msg_id"
     --parse-mode html
-    --non-interactive
   )
-  if [[ -n "$TG_PROXY" ]]; then
-    cmd+=(--proxy "$TG_PROXY")
-  fi
+  append_telegram_proxy_args cmd
   if [[ -n "$TG_SESSION_STRING" ]]; then
     cmd+=(--session-string "$TG_SESSION_STRING")
   fi
@@ -887,7 +780,7 @@ send_telegram_close() {
 }
 
 delete_telegram_message() {
-  local config_file="$1" msg_id="$2"
+  local msg_id="$1"
   local -a py_cmd cmd
   select_python_for_telegram "$TG_PYTHON_MIN" "telethon" "colorama"
   py_cmd=("${PY_CMD[@]}" "-u")
@@ -905,14 +798,10 @@ delete_telegram_message() {
     --api-id "$TG_API_ID"
     --api-hash "$TG_API_HASH"
     --session "$TG_SESSION"
-    --config-file "$config_file"
     --to "$TG_TO"
     --delete-message "$msg_id"
-    --non-interactive
   )
-  if [[ -n "$TG_PROXY" ]]; then
-    cmd+=(--proxy "$TG_PROXY")
-  fi
+  append_telegram_proxy_args cmd
   if [[ -n "$TG_SESSION_STRING" ]]; then
     cmd+=(--session-string "$TG_SESSION_STRING")
   fi
@@ -933,14 +822,29 @@ OUTPUT_DIR="${HOME:+$HOME/syncpacks}"
 PACK_PREFIX="syncpack"
 MACHINE_NAME=""
 SEND_TO_TELEGRAM="0"
-MPROTO_LOGIN="0"
-LIST_CHATS="0"
-LIST_CHAT_FILTER=""
+TELEGRAM_DOCTOR="0"
 OTHER_OPTS_USED="0"
 TG_API_ID=""
 TG_API_HASH=""
 TG_TO=""
 TG_SESSION=""
+TG_SESSION_STRING=""
+TG_PROXY_TYPE="none"
+TG_SOCKS5_HOST=""
+TG_SOCKS5_PORT=""
+TG_SOCKS5_USER=""
+TG_SOCKS5_PASSWORD=""
+TG_HTTP_HOST=""
+TG_HTTP_PORT=""
+TG_HTTP_USER=""
+TG_HTTP_PASSWORD=""
+TG_MTPROTO_HOST=""
+TG_MTPROTO_PORT=""
+TG_MTPROTO_SECRET=""
+TG_ACK_REQUIRED="1"
+TG_ACK_TEXT="Closed by"
+TG_ACK_SCAN_LIMIT="32"
+TG_PYTHON_MIN="3.8"
 TG_CAPTION=""
 final_path=""
 DELETE_FINAL_ON_EXIT="0"
@@ -949,22 +853,22 @@ BRANCHES_RAW=""
 WITH_TAGS=""
 UPDATE_REMOTE="0"
 REMOTE_NAME=""
-RECENT_DAYS="30"
+RECENT_DAYS=""
 
-want_push_help="0"
+want_send_help="0"
 want_help="0"
 for _a in "$@"; do
   case "$_a" in
-    push) want_push_help="1" ;;
+    send) want_send_help="1" ;;
     --help|-h) want_help="1" ;;
   esac
 done
-if [[ "$want_push_help" == "1" && "$want_help" == "1" ]]; then
-  usage_push
+if [[ "$want_send_help" == "1" && "$want_help" == "1" ]]; then
+  usage_send
 fi
 
 while [[ $# -gt 0 ]]; do
-  if [[ "$1" == "push" ]]; then
+  if [[ "$1" == "send" ]]; then
     SEND_TO_TELEGRAM="1"
     OTHER_OPTS_USED="1"
     shift 1
@@ -977,11 +881,32 @@ while [[ $# -gt 0 ]]; do
     --pack-prefix=*)   PACK_PREFIX="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     --machine-name)    MACHINE_NAME="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
     --machine-name=*)  MACHINE_NAME="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
-    -u|--update-remote) UPDATE_REMOTE="1"; OTHER_OPTS_USED="1"; shift 1;;
+    -u|--update)
+      UPDATE_REMOTE="1"
+      OTHER_OPTS_USED="1"
+      if [[ $# -ge 2 && "${2:-}" =~ ^-?[0-9]+$ ]]; then
+        if [[ "${2:-}" != "-1" ]]; then
+          RECENT_DAYS="${2:-}"
+        else
+          RECENT_DAYS=""
+        fi
+        shift 2
+      else
+        shift 1
+      fi
+      ;;
     --remote)          REMOTE_NAME="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
     --remote=*)        REMOTE_NAME="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
-    --recent-days)     RECENT_DAYS="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
-    --recent-days=*)   RECENT_DAYS="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
+    --update=*)
+      UPDATE_REMOTE="1"
+      OTHER_OPTS_USED="1"
+      if [[ "${1#*=}" != "-1" ]]; then
+        RECENT_DAYS="${1#*=}"
+      else
+        RECENT_DAYS=""
+      fi
+      shift 1
+      ;;
     --branch)          BRANCHES_RAW="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
     --branch=*)        BRANCHES_RAW="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     --branches)        BRANCHES_RAW="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
@@ -989,72 +914,85 @@ while [[ $# -gt 0 ]]; do
     --with-tags)       WITH_TAGS="${2:-}"; OTHER_OPTS_USED="1"; shift 2;;
     --with-tags=*)     WITH_TAGS="${1#*=}"; OTHER_OPTS_USED="1"; shift 1;;
     --dry-run)         DRY_RUN="1"; shift 1;;
-    --mproto-login)    MPROTO_LOGIN="1"; shift 1;;
-    --list-chats)      LIST_CHATS="1"; LIST_CHAT_FILTER=""; shift 1;;
-    --list-chat)       LIST_CHATS="1"; LIST_CHAT_FILTER="${2:-}"; shift 2;;
-    --list-chat=*)     LIST_CHATS="1"; LIST_CHAT_FILTER="${1#*=}"; shift 1;;
+    --telegram-doctor) TELEGRAM_DOCTOR="1"; shift 1;;
+    --api-id)          TG_API_ID="${2:-}"; shift 2;;
+    --api-id=*)        TG_API_ID="${1#*=}"; shift 1;;
+    --api-hash)        TG_API_HASH="${2:-}"; shift 2;;
+    --api-hash=*)      TG_API_HASH="${1#*=}"; shift 1;;
+    --session)         TG_SESSION="${2:-}"; shift 2;;
+    --session=*)       TG_SESSION="${1#*=}"; shift 1;;
+    --session-string)  TG_SESSION_STRING="${2:-}"; shift 2;;
+    --session-string=*) TG_SESSION_STRING="${1#*=}"; shift 1;;
+    --to)              TG_TO="${2:-}"; shift 2;;
+    --to=*)            TG_TO="${1#*=}"; shift 1;;
+    --ack-scan-limit)  TG_ACK_SCAN_LIMIT="${2:-}"; shift 2;;
+    --ack-scan-limit=*) TG_ACK_SCAN_LIMIT="${1#*=}"; shift 1;;
+    --caption)         TG_CAPTION="${2:-}"; shift 2;;
+    --caption=*)       TG_CAPTION="${1#*=}"; shift 1;;
+    --python-min)      TG_PYTHON_MIN="${2:-}"; shift 2;;
+    --python-min=*)    TG_PYTHON_MIN="${1#*=}"; shift 1;;
+    --proxy-type)      TG_PROXY_TYPE="${2:-}"; shift 2;;
+    --proxy-type=*)    TG_PROXY_TYPE="${1#*=}"; shift 1;;
+    --socks5-host)     TG_SOCKS5_HOST="${2:-}"; shift 2;;
+    --socks5-host=*)   TG_SOCKS5_HOST="${1#*=}"; shift 1;;
+    --socks5-port)     TG_SOCKS5_PORT="${2:-}"; shift 2;;
+    --socks5-port=*)   TG_SOCKS5_PORT="${1#*=}"; shift 1;;
+    --socks5-user)     TG_SOCKS5_USER="${2:-}"; shift 2;;
+    --socks5-user=*)   TG_SOCKS5_USER="${1#*=}"; shift 1;;
+    --socks5-password) TG_SOCKS5_PASSWORD="${2:-}"; shift 2;;
+    --socks5-password=*) TG_SOCKS5_PASSWORD="${1#*=}"; shift 1;;
+    --http-host)       TG_HTTP_HOST="${2:-}"; shift 2;;
+    --http-host=*)     TG_HTTP_HOST="${1#*=}"; shift 1;;
+    --http-port)       TG_HTTP_PORT="${2:-}"; shift 2;;
+    --http-port=*)     TG_HTTP_PORT="${1#*=}"; shift 1;;
+    --http-user)       TG_HTTP_USER="${2:-}"; shift 2;;
+    --http-user=*)     TG_HTTP_USER="${1#*=}"; shift 1;;
+    --http-password)   TG_HTTP_PASSWORD="${2:-}"; shift 2;;
+    --http-password=*) TG_HTTP_PASSWORD="${1#*=}"; shift 1;;
+    --mtproto-host)    TG_MTPROTO_HOST="${2:-}"; shift 2;;
+    --mtproto-host=*)  TG_MTPROTO_HOST="${1#*=}"; shift 1;;
+    --mtproto-port)    TG_MTPROTO_PORT="${2:-}"; shift 2;;
+    --mtproto-port=*)  TG_MTPROTO_PORT="${1#*=}"; shift 1;;
+    --mtproto-secret)  TG_MTPROTO_SECRET="${2:-}"; shift 2;;
+    --mtproto-secret=*) TG_MTPROTO_SECRET="${1#*=}"; shift 1;;
     --help|-h)         usage_main;;
     *) die "Unknown option: $1 (use --help)";;
   esac
 done
 
-if [[ "$MPROTO_LOGIN" == "1" && "$OTHER_OPTS_USED" == "1" ]]; then
-  die "--mproto-login cannot be combined with other options."
-fi
-if [[ "$LIST_CHATS" == "1" && "$OTHER_OPTS_USED" == "1" ]]; then
-  die "--list-chats cannot be combined with other options."
-fi
-
 REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [[ -z "$REPO_DIR" && "$MPROTO_LOGIN" != "1" && "$LIST_CHATS" != "1" ]]; then
+if [[ -z "$REPO_DIR" && "$TELEGRAM_DOCTOR" != "1" ]]; then
   die "Run pack.sh inside a git repository."
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CONFIG_FILE="$TOOL_DIR/conf/pack.conf"
-load_config_overrides "$CONFIG_FILE"
-
 [[ -n "$PACK_PREFIX" ]] || die "--pack-prefix cannot be empty"
-if [[ "$MPROTO_LOGIN" != "1" && "$LIST_CHATS" != "1" ]]; then
+if [[ "$TELEGRAM_DOCTOR" != "1" ]]; then
   [[ -n "$OUTPUT_DIR" ]] || die "HOME is not set; use --output-dir PATH."
 fi
 if [[ -n "$WITH_TAGS" && "$WITH_TAGS" != "0" && "$WITH_TAGS" != "1" ]]; then
   die "--with-tags must be 0|1"
 fi
-if [[ -n "$UPDATE_REMOTE" && "$UPDATE_REMOTE" != "0" && "$UPDATE_REMOTE" != "1" ]]; then
-  die "update_remote must be 0|1"
-fi
-if [[ -n "$RECENT_DAYS" && ! "$RECENT_DAYS" =~ ^[0-9]+$ ]]; then
-  die "--recent-days must be an integer"
+if [[ -n "$RECENT_DAYS" ]]; then
+  if [[ ! "$RECENT_DAYS" =~ ^-?[0-9]+$ ]]; then
+    die "update must be -1 or a positive integer"
+  fi
+  if [[ "$RECENT_DAYS" == "0" || "$RECENT_DAYS" =~ ^- ]]; then
+    die "update must be -1 or a positive integer"
+  fi
 fi
 
-if [[ "$MPROTO_LOGIN" != "1" && "$LIST_CHATS" != "1" ]]; then
+if [[ "$TELEGRAM_DOCTOR" != "1" ]]; then
   ensure_repo_ok_and_clean "$REPO_DIR"
 fi
 
-if [[ "$MPROTO_LOGIN" == "1" ]]; then
-  TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
-  if [[ -f "$TELEGRAM_CONFIG_FILE" && -s "$TELEGRAM_CONFIG_FILE" ]]; then
-    read -r -p "telegram.conf exists. Overwrite? [y/N] " _ans
-    case "${_ans:-}" in
-      y|Y|yes|YES) rm -f -- "$TELEGRAM_CONFIG_FILE" ;;
-      *) die "Aborted. Existing telegram.conf kept." ;;
-    esac
-  fi
-  load_telegram_config "$TELEGRAM_CONFIG_FILE"
-  log_pack "MTProto login..."
-  send_mproto_login "$TELEGRAM_CONFIG_FILE"
-  exit $?
-fi
-
-if [[ "$LIST_CHATS" == "1" ]]; then
-  TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
-  load_telegram_config "$TELEGRAM_CONFIG_FILE"
-  require_telegram_config "$TELEGRAM_CONFIG_FILE"
-  log_pack "Telegram chats..."
-  list_telegram_chats "$TELEGRAM_CONFIG_FILE" "$LIST_CHAT_FILTER"
+if [[ "$TELEGRAM_DOCTOR" == "1" ]]; then
+  require_telegram_config "runtime arguments"
+  [[ -n "$TG_TO" ]] || die "telegram_to is required. Set [pack.send.telegram].to in conf.toml or run pack send setup."
+  log_pack "Telegram doctor..."
+  telegram_doctor
   exit $?
 fi
 
@@ -1221,9 +1159,7 @@ tar -tzf "$tmp_out" | tr -d '\r' | awk 'BEGIN{b=0;m=0;bad=0}
 mv -f "$tmp_out" "$final_path" || die "Cannot move archive to output dir"
 
 if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
-  TELEGRAM_CONFIG_FILE="$TOOL_DIR/conf/telegram.conf"
-  load_telegram_config "$TELEGRAM_CONFIG_FILE"
-  require_telegram_config "$TELEGRAM_CONFIG_FILE"
+  require_telegram_config "runtime arguments"
   if looks_like_placeholder "$TG_TO"; then
     TG_TO=""
   fi
@@ -1233,7 +1169,7 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
       TG_TO="$(trim_ws "$TG_TO")"
     fi
   fi
-  [[ -n "$TG_TO" ]] || die "telegram_to is required. Set it in telegram.conf or enter it interactively."
+  [[ -n "$TG_TO" ]] || die "telegram_to is required. Set [pack.send.telegram].to in conf.toml or run pack send setup."
   if [[ -z "$TG_CAPTION" ]]; then
     TG_CAPTION="Packed by <b>$(escape_html "$MACHINE_NAME")</b>"$'\n'"project: $(escape_html "$PROJECT_NAME")"$'\n'"content: $(escape_html "$content_desc")"
   fi
@@ -1242,7 +1178,7 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
   DELETE_FINAL_ON_EXIT="1"
   ack_meta="$tmp/ack_meta.txt"
   rm -f -- "$ack_meta" 2>/dev/null || true
-  if ! check_telegram_ack "$TELEGRAM_CONFIG_FILE" "$ack_meta" "$bundle_sha_short"; then
+  if ! check_telegram_ack "$ack_meta" "$bundle_sha_short"; then
     ack_rc=$?
     if [[ "$ack_rc" == "5" ]]; then
       die "Latest pack already closed with same SHA."
@@ -1259,9 +1195,9 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
             case "${_ack_ans:-}" in
               y|Y|yes|YES)
                 log_pack "Closing previous pack as replaced..."
-                send_telegram_close "$TELEGRAM_CONFIG_FILE" "$ack_msg_id" "replaced"
+                send_telegram_close "$ack_msg_id" "replaced"
                 log_pack "Deleting previous pack message..."
-                delete_telegram_message "$TELEGRAM_CONFIG_FILE" "$ack_msg_id"
+                delete_telegram_message "$ack_msg_id"
                 ;;
               *)
                 die "Previous pack not acknowledged."
@@ -1276,7 +1212,7 @@ if [[ "$SEND_TO_TELEGRAM" == "1" ]]; then
       die "Telegram ack check failed."
     fi
   fi
-  send_to_telegram_personal "$final_path" "$TG_CAPTION" "$TELEGRAM_CONFIG_FILE"
+  send_to_telegram_personal "$final_path" "$TG_CAPTION"
   rm -f -- "$final_path" || die "Uploaded to Telegram, but failed to delete local pack: $final_path"
   DELETE_FINAL_ON_EXIT="0"
   log_ok "Removed: $final_path"

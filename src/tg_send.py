@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+from dataclasses import dataclass
 import logging
 import os
 import platform
@@ -11,27 +12,34 @@ import threading
 import time
 import traceback
 from urllib.parse import urlparse
-from typing import Callable, Dict, List, Optional, Set, Tuple, TypeVar
+from typing import Callable, Dict, List, Mapping, Optional, Set, Tuple, TypeVar
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Send a file to Telegram using a personal account (MTProto)."
+        description="Telegram runtime helper for sync_tool."
     )
     parser.add_argument("--api-id", default="")
     parser.add_argument("--api-hash", default="")
     parser.add_argument("--session", default="")
-    parser.add_argument("--config-file", default="")
     parser.add_argument("--session-string", default="")
-    parser.add_argument("--phone", default="")
-    parser.add_argument("--code", default="")
-    parser.add_argument("--password", default="")
     parser.add_argument("--to", default="", help="Username, phone, user ID, or Saved Messages")
     parser.add_argument("--from", dest="from_peer", default="", help="Source chat/user for pull")
     parser.add_argument("--file", default="")
     parser.add_argument("--text", default="")
     parser.add_argument("--caption", default="")
-    parser.add_argument("--proxy", default="", help="Proxy URL, e.g. socks5://user:pass@host:1080")
+    parser.add_argument("--proxy-type", default="none", help=argparse.SUPPRESS)
+    parser.add_argument("--socks5-host", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--socks5-port", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--socks5-user", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--socks5-password", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--http-host", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--http-port", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--http-user", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--http-password", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--mtproto-host", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--mtproto-port", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--mtproto-secret", default="", help=argparse.SUPPRESS)
     parser.add_argument("--pull-latest", action="store_true", help="Download latest sync pack from Telegram")
     parser.add_argument("--pack-dir", default="")
     parser.add_argument("--pack-prefix", default="")
@@ -45,15 +53,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--machine-name", default="")
     parser.add_argument("--reply-to", type=int, default=0)
     parser.add_argument("--last-message-id", type=int, default=0)
-    parser.add_argument("--mproto-login", action="store_true", help="Interactive MTProto login and connection test")
-    parser.add_argument("--mtproto-test", dest="mproto_login", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--list-chats", action="store_true", help="List available chats with peer_id/access_hash")
-    parser.add_argument("--chat-filter", default="", help="Filter for list-chats (substring match)")
+    parser.add_argument("--doctor", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--parse-mode", default="", help="Force parse mode (e.g. md)")
     parser.add_argument("--check-ack", action="store_true", help="Only check whether latest pack is closed")
     parser.add_argument("--delete-message", type=int, default=0, help="Delete a message by id in the target chat")
     parser.add_argument("--current-sha", default="", help="Current bundle sha (short) to detect duplicates")
-    parser.add_argument("--non-interactive", action="store_true", help="Do not prompt for missing values")
     return parser.parse_args()
 
 
@@ -119,7 +123,6 @@ if os.getenv("FORCE_LIVE_STATUS") not in (None, "", "0"):
 _LIVE_STATUS_LOCK = threading.Lock()
 _LIVE_STATUS_ACTIVE = False
 _LIVE_STATUS_WIDTH = 0
-NON_INTERACTIVE = False
 
 if USE_256_COLOR:
     C_PYT = "38;5;33"
@@ -323,36 +326,134 @@ def looks_like_placeholder(value: str) -> bool:
     return v.startswith("REPLACE") or "XXXXXXXX" in v
 
 
-def normalize_proxy(value: str) -> str:
-    raw = (value or "").strip()
-    if not raw or looks_like_placeholder(raw):
-        return ""
-    return raw
+@dataclass(frozen=True)
+class ProxyMode:
+    kind: str
+    host: str = ""
+    port: int = 0
+    user: str = ""
+    password: str = ""
+    secret: str = ""
 
 
-def parse_proxy(value: str) -> Tuple[Tuple[object, str, int, bool, Optional[str], Optional[str]], str]:
-    raw = normalize_proxy(value)
-    if not raw:
-        raise ValueError("telegram_proxy is empty.")
-    if "://" not in raw:
-        raw = "socks5://" + raw
+def validate_proxy_type(raw: str) -> str:
+    value = (raw or "").strip().lower()
+    if not value or looks_like_placeholder(value):
+        raise ValueError("telegram_proxy_type must be one of: none, socks5, http, mtproto")
+    if value not in ("none", "socks5", "http", "mtproto"):
+        raise ValueError("telegram_proxy_type must be one of: none, socks5, http, mtproto")
+    return value
 
-    parsed = urlparse(raw)
-    scheme = (parsed.scheme or "").lower()
-    host = parsed.hostname
-    port = parsed.port
-    if not scheme or not host or not port:
-        raise ValueError("telegram_proxy must be like socks5://host:port or http://host:port")
 
-    rdns = True
-    if scheme in ("socks5h", "socks4a"):
-        scheme = scheme[:-1]
-        rdns = True
+def parse_required_port(raw: str, field_name: str) -> int:
+    value = (raw or "").strip()
+    if not value or looks_like_placeholder(value):
+        raise ValueError(f"{field_name} is required.")
+    if not value.isdigit():
+        raise ValueError(f"{field_name} must be an integer.")
+    return int(value)
 
-    if scheme not in ("socks5", "socks4", "http"):
-        raise ValueError("telegram_proxy scheme must be socks5, socks4, or http")
 
-    return (scheme, host, int(port), rdns, parsed.username, parsed.password), raw
+def validate_transport_credentials(user: str, password: str, prefix: str) -> Tuple[str, str]:
+    normalized_user = normalize_mtproxy_value(user)
+    normalized_password = normalize_mtproxy_value(password)
+    if bool(normalized_user) != bool(normalized_password):
+        raise ValueError(f"{prefix}_user and {prefix}_password must be supplied together.")
+    return normalized_user, normalized_password
+
+
+def validate_mtproto_secret(raw: str) -> str:
+    value = (raw or "").strip().lower()
+    if not value or looks_like_placeholder(value):
+        raise ValueError(
+            "telegram_mtproto_secret must be a non-empty even-length hexadecimal string"
+        )
+    if len(value) % 2 != 0 or any(ch not in "0123456789abcdef" for ch in value):
+        raise ValueError(
+            "telegram_mtproto_secret must be a non-empty even-length hexadecimal string"
+        )
+    return value
+
+
+def resolve_configured_proxy_mode(
+    *,
+    proxy_type: str,
+    socks5_host: str = "",
+    socks5_port: str = "",
+    socks5_user: str = "",
+    socks5_password: str = "",
+    http_host: str = "",
+    http_port: str = "",
+    http_user: str = "",
+    http_password: str = "",
+    mtproto_host: str = "",
+    mtproto_port: str = "",
+    mtproto_secret: str = "",
+) -> ProxyMode:
+    normalized_type = validate_proxy_type(proxy_type)
+    socks5_host = normalize_mtproxy_value(socks5_host)
+    socks5_port = normalize_mtproxy_value(socks5_port)
+    socks5_user = normalize_mtproxy_value(socks5_user)
+    socks5_password = normalize_mtproxy_value(socks5_password)
+    http_host = normalize_mtproxy_value(http_host)
+    http_port = normalize_mtproxy_value(http_port)
+    http_user = normalize_mtproxy_value(http_user)
+    http_password = normalize_mtproxy_value(http_password)
+    mtproto_host = normalize_mtproxy_value(mtproto_host)
+    mtproto_port = normalize_mtproxy_value(mtproto_port)
+    mtproto_secret = normalize_mtproxy_value(mtproto_secret)
+
+    has_socks5 = bool(socks5_host or socks5_port or socks5_user or socks5_password)
+    has_http = bool(http_host or http_port or http_user or http_password)
+    has_mtproto = bool(mtproto_host or mtproto_port or mtproto_secret)
+
+    if normalized_type == "none":
+        if has_socks5 or has_http or has_mtproto:
+            raise ValueError("Proxy keys are not allowed when telegram_proxy_type=none.")
+        return ProxyMode(kind="none")
+
+    if normalized_type == "socks5":
+        if has_http or has_mtproto:
+            raise ValueError("telegram_http_* and telegram_mtproto_* keys are not allowed when telegram_proxy_type=socks5.")
+        if not socks5_host:
+            raise ValueError("telegram_socks5_host is required when telegram_proxy_type=socks5.")
+        socks5_user, socks5_password = validate_transport_credentials(
+            socks5_user, socks5_password, "telegram_socks5"
+        )
+        return ProxyMode(
+            kind="socks5",
+            host=socks5_host,
+            port=parse_required_port(socks5_port, "telegram_socks5_port"),
+            user=socks5_user,
+            password=socks5_password,
+        )
+
+    if normalized_type == "http":
+        if has_socks5 or has_mtproto:
+            raise ValueError("telegram_socks5_* and telegram_mtproto_* keys are not allowed when telegram_proxy_type=http.")
+        if not http_host:
+            raise ValueError("telegram_http_host is required when telegram_proxy_type=http.")
+        http_user, http_password = validate_transport_credentials(
+            http_user, http_password, "telegram_http"
+        )
+        return ProxyMode(
+            kind="http",
+            host=http_host,
+            port=parse_required_port(http_port, "telegram_http_port"),
+            user=http_user,
+            password=http_password,
+        )
+
+    if has_socks5 or has_http:
+        raise ValueError("telegram_socks5_* and telegram_http_* keys are not allowed when telegram_proxy_type=mtproto.")
+    if not mtproto_host:
+        raise ValueError("telegram_mtproto_host is required when telegram_proxy_type=mtproto.")
+    return ProxyMode(
+        kind="mtproto",
+        host=mtproto_host,
+        port=parse_required_port(mtproto_port, "telegram_mtproto_port"),
+        secret=validate_mtproto_secret(mtproto_secret),
+    )
 
 
 def ensure_proxy_support() -> None:
@@ -366,24 +467,34 @@ def ensure_proxy_support() -> None:
         return
     except Exception:
         raise ValueError(
-            "telegram_proxy requires python-socks or PySocks. Install with: pip install python-socks"
+            "transport proxy support requires python-socks or PySocks. Install with: pip install python-socks"
         )
 
+def normalize_mtproxy_value(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw or looks_like_placeholder(raw):
+        return ""
+    return raw
 
-def format_proxy_for_log(value: str) -> str:
-    raw = normalize_proxy(value)
-    if not raw:
+
+def normalize_session_path(raw_value: str) -> str:
+    value = os.path.expanduser((raw_value or "").strip())
+    if os.name == "nt":
+        return value
+
+    unix_style = value.replace("\\", "/")
+    match = re.match(r"^([A-Za-z]):/(.*)$", unix_style)
+    if not match:
+        return value
+
+    drive = match.group(1).lower()
+    rest = match.group(2)
+    return f"/mnt/{drive}/{rest}"
+
+def format_mtproxy_for_log(host: str, port: int) -> str:
+    if not host or not port:
         return "none"
-    try:
-        if "://" not in raw:
-            raw = "socks5://" + raw
-        parsed = urlparse(raw)
-        scheme = parsed.scheme or "socks5"
-        host = parsed.hostname or "?"
-        port = parsed.port or "?"
-        return f"{scheme}://{host}:{port}"
-    except Exception:
-        return "set"
+    return f"mtproto://{host}:{port}"
 
 
 def extract_pack_timestamp(name: str) -> str:
@@ -400,141 +511,73 @@ def _unpack_ack_text(text: str, machine: str) -> str:
     return base
 
 
-def update_conf_file(path: str, updates: Optional[Dict[str, str]] = None, remove_keys: Optional[Set[str]] = None) -> None:
-    if not path:
-        return
+def resolve_proxy_mode_from_config(
+    args: argparse.Namespace,
+) -> ProxyMode:
+    proxy_type_raw = (getattr(args, "proxy_type", "") or "").strip()
+    socks5_host = (getattr(args, "socks5_host", "") or "").strip()
+    socks5_port = (getattr(args, "socks5_port", "") or "").strip()
+    socks5_user = (getattr(args, "socks5_user", "") or "").strip()
+    socks5_password = (getattr(args, "socks5_password", "") or "").strip()
+    http_host = (getattr(args, "http_host", "") or "").strip()
+    http_port = (getattr(args, "http_port", "") or "").strip()
+    http_user = (getattr(args, "http_user", "") or "").strip()
+    http_password = (getattr(args, "http_password", "") or "").strip()
+    mtproto_host = (getattr(args, "mtproto_host", "") or "").strip()
+    mtproto_port = (getattr(args, "mtproto_port", "") or "").strip()
+    mtproto_secret = (getattr(args, "mtproto_secret", "") or "").strip()
 
-    updates = updates or {}
-    remove_keys = remove_keys or set()
+    proxy_type = validate_proxy_type(proxy_type_raw or "none")
 
-    conf_path = os.path.expanduser(path)
-    conf_dir = os.path.dirname(conf_path)
-    if conf_dir:
-        os.makedirs(conf_dir, exist_ok=True)
-
-    lines: List[str] = []
-    if os.path.exists(conf_path):
-        with open(conf_path, "r", encoding="utf-8", errors="ignore") as f:
-            lines = f.read().splitlines()
-
-    out: List[str] = []
-    seen: Set[str] = set()
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in line:
-            out.append(line)
-            continue
-
-        key, _ = line.split("=", 1)
-        key = key.strip()
-
-        if key in remove_keys:
-            continue
-
-        if key in updates:
-            out.append(f"{key}={updates[key]}")
-            seen.add(key)
-        else:
-            out.append(line)
-
-    for key, value in updates.items():
-        if key not in seen:
-            out.append(f"{key}={value}")
-
-    text = "\n".join(out)
-    if text:
-        text += "\n"
-    with open(conf_path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
-
-
-def prompt_input(prompt: str, secret: bool = False) -> str:
-    del secret  # Plain input is the most reliable across Git Bash + Windows Python.
-    if NON_INTERACTIVE:
-        return ""
-    prompt_text = f"{_prefix('PYT', C_PYT)}{prompt}"
-
-    # Primary path: explicit prompt + stdin read.
-    try:
-        if sys.stdout.isatty():
-            sys.stdout.write(prompt_text)
-            sys.stdout.flush()
-        else:
-            sys.stderr.write(prompt_text)
-            sys.stderr.flush()
-        line = sys.stdin.readline()
-        if line:
-            return line.strip()
-    except OSError:
-        pass
-
-    # Fallback for terminals with detached stdin handles.
-    for in_name, out_name in (("/dev/tty", "/dev/tty"), ("CONIN$", "CONOUT$")):
-        try:
-            with open(in_name, "r", encoding="utf-8", errors="ignore") as tty_in, open(
-                out_name, "w", encoding="utf-8", errors="ignore"
-            ) as tty_out:
-                tty_out.write(prompt_text)
-                tty_out.flush()
-                line = tty_in.readline()
-                if line:
-                    return line.strip()
-        except OSError:
-            continue
-
-    # Last-resort path.
-    try:
-        return input(prompt_text).strip()
-    except (EOFError, OSError):
-        pass
-
-    return ""
-
-
-def resolve_required(name: str, raw_value: str, prompt: str, secret: bool = False) -> str:
-    value = (raw_value or "").strip()
-    if not value or looks_like_placeholder(value):
-        if NON_INTERACTIVE:
-            raise ValueError(f"{name} is required. Run pack --mproto-login.")
-        value = prompt_input(prompt, secret=secret)
-    if not value:
-        raise ValueError(f"{name} is required.")
-    return value
+    return resolve_configured_proxy_mode(
+        proxy_type=proxy_type,
+        socks5_host=socks5_host,
+        socks5_port=socks5_port,
+        socks5_user=socks5_user,
+        socks5_password=socks5_password,
+        http_host=http_host,
+        http_port=http_port,
+        http_user=http_user,
+        http_password=http_password,
+        mtproto_host=mtproto_host,
+        mtproto_port=mtproto_port,
+        mtproto_secret=mtproto_secret,
+    )
 
 
 def main() -> int:
     args = parse_args()
-    global NON_INTERACTIVE
-    NON_INTERACTIVE = bool(args.non_interactive)
 
-    if not args.mproto_login:
-        if args.list_chats:
-            if args.pull_latest or args.file or args.text or args.check_ack or args.delete_message:
-                err("list-chats cannot be combined with file/text/pull-latest")
+    if args.doctor:
+        if args.pull_latest or args.file or args.text or args.check_ack or args.delete_message:
+            err("doctor cannot be combined with file/text/pull-latest/check-ack/delete-message")
+            return 1
+        if not args.to and not args.from_peer:
+            err("doctor requires --to or --from")
+            return 1
+    elif args.check_ack or args.delete_message:
+        if args.pull_latest or args.file or args.text:
+            err("check-ack/delete-message cannot be combined with file/text/pull-latest")
+            return 1
+    else:
+        if args.pull_latest and (args.file or args.text):
+            err("file/text cannot be used with --pull-latest")
+            return 1
+        if args.text and args.file:
+            err("use either --text or --file, not both")
+            return 1
+        if not args.file and not args.text:
+            if not args.pull_latest:
+                err("file or text is required unless --doctor or --pull-latest is set")
                 return 1
-        if args.check_ack or args.delete_message:
-            if args.pull_latest or args.file or args.text:
-                err("check-ack/delete-message cannot be combined with file/text/pull-latest")
+        if args.pull_latest:
+            if not args.pack_dir or not args.pack_prefix or not args.project_name:
+                err("--pull-latest requires --pack-dir, --pack-prefix, and --project-name")
                 return 1
         else:
-            if args.pull_latest and (args.file or args.text):
-                err("file/text cannot be used with --pull-latest")
+            if args.file and not os.path.isfile(args.file):
+                err(f"file not found: {args.file}")
                 return 1
-            if args.text and args.file:
-                err("use either --text or --file, not both")
-                return 1
-            if not args.file and not args.text:
-                if not args.pull_latest:
-                    err("file or text is required unless --mproto-login or --pull-latest is set")
-                    return 1
-            if args.pull_latest:
-                if not args.pack_dir or not args.pack_prefix or not args.project_name:
-                    err("--pull-latest requires --pack-dir, --pack-prefix, and --project-name")
-                    return 1
-            else:
-                if args.file and not os.path.isfile(args.file):
-                    err(f"file not found: {args.file}")
-                    return 1
 
     try:
         from colorama import just_fix_windows_console
@@ -546,24 +589,25 @@ def main() -> int:
     session_value = (args.session or "").strip()
     if not session_value or looks_like_placeholder(session_value):
         session_value = "~/.sync_tool_telegram"
-    session = os.path.expanduser(session_value)
+    session = normalize_session_path(session_value)
 
     session_dir = os.path.dirname(session)
     if session_dir:
         os.makedirs(session_dir, exist_ok=True)
 
-    def _import_telethon() -> Tuple[object, object, object, object]:
-        from telethon.errors import FloodWaitError, SessionPasswordNeededError
+    def _import_telethon() -> Tuple[object, object, object, object, object]:
+        from telethon import connection
+        from telethon.errors import FloodWaitError
         try:
             from telethon.errors import ProxyConnectionError as _ProxyConnectionError
         except Exception:
             _ProxyConnectionError = ConnectionError
         from telethon.sessions import StringSession
         from telethon.sync import TelegramClient
-        return FloodWaitError, SessionPasswordNeededError, _ProxyConnectionError, StringSession, TelegramClient
+        return FloodWaitError, _ProxyConnectionError, StringSession, TelegramClient, connection
 
     try:
-        FloodWaitError, SessionPasswordNeededError, ProxyConnectionError, StringSession, TelegramClient = _import_telethon()
+        FloodWaitError, ProxyConnectionError, StringSession, TelegramClient, telethon_connection = _import_telethon()
     except Exception as exc:
         # Retry once with user site explicitly enabled (Store Python can disable it).
         try:
@@ -571,7 +615,7 @@ def main() -> int:
             user_site = _site.getusersitepackages()
             if user_site and user_site not in sys.path:
                 sys.path.append(user_site)
-            FloodWaitError, SessionPasswordNeededError, ProxyConnectionError, StringSession, TelegramClient = _import_telethon()
+            FloodWaitError, ProxyConnectionError, StringSession, TelegramClient, telethon_connection = _import_telethon()
         except Exception as exc2:
             err(f"telethon import failed: {type(exc2).__name__}: {exc2}")
             err(f"sys.executable: {sys.executable}")
@@ -629,7 +673,19 @@ def main() -> int:
         _err_detail(f"  from: {args.from_peer or 'unset'}")
         _err_detail(f"  session: {os.path.expanduser(args.session or '~/.sync_tool_telegram')}")
         _err_detail(f"  session_string: {'set' if (args.session_string or '').strip() else 'unset'}")
-        _err_detail(f"  proxy: {format_proxy_for_log(proxy_raw)}")
+        if proxy_mode == "socks5":
+            _err_detail("  proxy mode: socks5")
+            _err_detail(f"  proxy: socks5://{socks5_host}:{socks5_port}")
+        elif proxy_mode == "http":
+            _err_detail("  proxy mode: http")
+            _err_detail(f"  proxy: http://{http_host}:{http_port}")
+        elif proxy_mode == "mtproto":
+            _err_detail(f"  proxy mode: mtproxy")
+            _err_detail(f"  mtproxy: {format_mtproxy_for_log(mtproto_host, mtproto_port)}")
+            _err_detail(f"  mtproxy_secret: {_mask_secret(mtproto_secret)}")
+        else:
+            _err_detail("  proxy mode: none")
+            _err_detail("  proxy: none")
         _err_detail(f"  ack_required: {args.require_ack}")
         if args.last_message_id:
             _err_detail(f"  last_message_id: {args.last_message_id}")
@@ -668,56 +724,62 @@ def main() -> int:
             for line in tb.splitlines():
                 _err_detail(f"    {line}")
 
-    proxy_raw = ""
-    proxy_tuple = None
+    proxy_mode = "none"
+    socks5_host = ""
+    socks5_port = 0
+    socks5_user = ""
+    socks5_password = ""
+    http_host = ""
+    http_port = 0
+    http_user = ""
+    http_password = ""
+    mtproto_host = ""
+    mtproto_port = 0
+    mtproto_secret = ""
     to_peer = ""
     from_peer = ""
 
     try:
         py("Telegram settings...")
-        api_id_raw = resolve_required("telegram_api_id", args.api_id, "Enter telegram_api_id: ")
+        api_id_raw = (args.api_id or "").strip()
+        if not api_id_raw or looks_like_placeholder(api_id_raw):
+            raise ValueError("telegram_api_id is required. Update [telegram.common] in conf.toml.")
         if not api_id_raw.isdigit():
             err("telegram_api_id must be an integer.")
             return 3
         api_id = int(api_id_raw)
 
-        api_hash = resolve_required("telegram_api_hash", args.api_hash, "Enter telegram_api_hash: ")
-        if args.list_chats:
-            to_peer = (args.to or "").strip()
-        elif args.mproto_login:
-            to_peer = (args.to or "").strip()
-        elif args.pull_latest:
+        api_hash = (args.api_hash or "").strip()
+        if not api_hash or looks_like_placeholder(api_hash):
+            raise ValueError("telegram_api_hash is required. Update [telegram.common] in conf.toml.")
+        if args.pull_latest:
             from_peer = (args.from_peer or "").strip()
             if not from_peer:
-                if NON_INTERACTIVE:
-                    raise ValueError("telegram_from is required. Run pack --mproto-login or set telegram_from.")
-                from_peer = prompt_input("Enter telegram_from (@group/@user/phone/id): ")
+                raise ValueError("telegram_from is required. Set [unpack.take.telegram].from in conf.toml or run unpack take setup.")
+        elif args.doctor:
+            to_peer = (args.to or "").strip()
+            from_peer = (args.from_peer or "").strip()
         else:
-            to_peer = resolve_required("telegram_to", args.to, "Enter telegram_to (@username/phone/id/me): ")
+            to_peer = (args.to or "").strip()
+            if not to_peer:
+                raise ValueError("telegram_to is required. Set [pack.send.telegram].to in conf.toml or run pack send setup.")
 
-        proxy_raw = normalize_proxy(args.proxy)
-        if args.mproto_login and not proxy_raw and not NON_INTERACTIVE:
-            proxy_raw = prompt_input("Enter telegram_proxy (optional, blank to skip): ")
-        proxy_raw = normalize_proxy(proxy_raw)
-        if proxy_raw:
-            proxy_tuple, proxy_raw = parse_proxy(proxy_raw)
-            ensure_proxy_support()
+        proxy_state = resolve_proxy_mode_from_config(args)
+        proxy_mode = proxy_state.kind
+        socks5_host = proxy_state.host if proxy_mode == "socks5" else ""
+        socks5_port = proxy_state.port if proxy_mode == "socks5" else 0
+        socks5_user = proxy_state.user if proxy_mode == "socks5" else ""
+        socks5_password = proxy_state.password if proxy_mode == "socks5" else ""
+        http_host = proxy_state.host if proxy_mode == "http" else ""
+        http_port = proxy_state.port if proxy_mode == "http" else 0
+        http_user = proxy_state.user if proxy_mode == "http" else ""
+        http_password = proxy_state.password if proxy_mode == "http" else ""
+        mtproto_host = proxy_state.host if proxy_mode == "mtproto" else ""
+        mtproto_port = proxy_state.port if proxy_mode == "mtproto" else 0
+        mtproto_secret = proxy_state.secret if proxy_mode == "mtproto" else ""
     except ValueError as exc:
         err(str(exc))
         return 3
-
-    # Persist stable values so the next run needs less input.
-    updates = {
-        "telegram_api_id": str(api_id),
-        "telegram_api_hash": api_hash,
-        "telegram_session": session,
-    }
-    if proxy_raw:
-        updates["telegram_proxy"] = proxy_raw
-    if to_peer:
-        updates["telegram_to"] = to_peer
-    if from_peer:
-        updates["telegram_from"] = from_peer
 
     session_string = (args.session_string or "").strip()
     if looks_like_placeholder(session_string):
@@ -735,8 +797,16 @@ def main() -> int:
         "timeout": 20,
         "flood_sleep_threshold": 0,
     }
-    if proxy_tuple:
-        client_kwargs["proxy"] = proxy_tuple
+    if proxy_mode in ("socks5", "http"):
+        ensure_proxy_support()
+        host = socks5_host if proxy_mode == "socks5" else http_host
+        port = socks5_port if proxy_mode == "socks5" else http_port
+        user = socks5_user if proxy_mode == "socks5" else http_user
+        password = socks5_password if proxy_mode == "socks5" else http_password
+        client_kwargs["proxy"] = (proxy_mode, host, port, True, user or None, password or None)
+    elif proxy_mode == "mtproto":
+        client_kwargs["connection"] = telethon_connection.ConnectionTcpMTProxyRandomizedIntermediate
+        client_kwargs["proxy"] = (mtproto_host, mtproto_port, mtproto_secret)
 
     client = TelegramClient(
         session_obj,
@@ -747,76 +817,10 @@ def main() -> int:
     current_stage = "connect"
 
     def ensure_authorized() -> None:
-        nonlocal current_stage
         if client.is_user_authorized():
             return
-        if NON_INTERACTIVE:
-            raise ValueError("telegram session is not authorized. Run pack --mproto-login.")
-
-        phone = resolve_required("telegram_phone", args.phone, "Enter telegram_phone (+7999...): ")
-        current_stage = "request_code"
-        sent = run_wait_step("Request login code", lambda: client.send_code_request(phone))
-        py("Login code sent. Check Telegram.")
-
-        code = resolve_required("telegram_code", args.code, "Enter Telegram login code: ")
-        try:
-            current_stage = "verify_code"
-            run_wait_step(
-                "Verify login code",
-                lambda: client.sign_in(
-                    phone=phone,
-                    code=code,
-                    phone_code_hash=sent.phone_code_hash,
-                ),
-            )
-        except SessionPasswordNeededError:
-            password = resolve_required(
-                "telegram_password",
-                args.password,
-                "Enter Telegram 2FA password: ",
-                secret=True,
-            )
-            current_stage = "verify_2fa"
-            run_wait_step("Verify 2FA", lambda: client.sign_in(password=password))
-
-        update_conf_file(
-            args.config_file,
-            updates={"telegram_phone": phone, "telegram_session": session},
-            remove_keys={"telegram_code", "telegram_password"},
-        )
+        raise ValueError("telegram session is not authorized. Update [telegram.common] in conf.toml and refresh the session.")
     try:
-        if args.mproto_login:
-            py("MTProto login: probes")
-            if proxy_raw:
-                py(f"Proxy: {format_proxy_for_log(proxy_raw)} (TCP probes are direct)")
-            ok, dns_info = _dns_lookup("telegram.org")
-            py(f"DNS telegram.org: {'ok' if ok else 'fail'} ({dns_info})")
-            ok, dns_info = _dns_lookup("api.telegram.org")
-            py(f"DNS api.telegram.org: {'ok' if ok else 'fail'} ({dns_info})")
-            for host, port in [
-                ("149.154.167.50", 443),
-                ("149.154.167.51", 443),
-                ("149.154.167.91", 443),
-                ("91.108.56.130", 443),
-            ]:
-                ok, info = _probe_tcp(host, port)
-                py(f"TCP {host}:{port} -> {'ok' if ok else 'fail'} ({info})")
-
-            run_wait_step("Connect Telegram", client.connect)
-            py(f"Connected: {client.is_connected()}")
-            ensure_authorized()
-            py(f"Authorized: {client.is_user_authorized()}")
-            dc_id = getattr(client.session, "dc_id", None)
-            server = getattr(client.session, "server_address", None)
-            port = getattr(client.session, "port", None)
-            if dc_id or server or port:
-                py(f"Session DC: {dc_id} {server}:{port}")
-            remove_keys = {"telegram_code", "telegram_password"}
-            if not proxy_raw:
-                remove_keys.add("telegram_proxy")
-            update_conf_file(args.config_file, updates=updates, remove_keys=remove_keys)
-            return 0
-
         def resolve_peer(peer_raw: str, label: str) -> object:
             if not peer_raw:
                 raise ValueError(f"{label} is required.")
@@ -824,6 +828,17 @@ def main() -> int:
                 return client.get_input_entity(peer_raw)
             except Exception:
                 raise ValueError(f"Cannot find any entity corresponding to \"{peer_raw}\"")
+
+        if args.doctor:
+            run_wait_step("Connect Telegram", client.connect)
+            ensure_authorized()
+            py(f"Authorized: {client.is_user_authorized()}")
+            if to_peer:
+                resolve_peer(to_peer, "telegram_to")
+            if from_peer:
+                resolve_peer(from_peer, "telegram_from")
+            py("Doctor OK")
+            return 0
 
         if args.check_ack:
             run_wait_step("Connect Telegram", client.connect)
@@ -901,39 +916,6 @@ def main() -> int:
                 lambda: client.delete_messages(resolved_to_peer, [args.delete_message]),
             )
             py("Message deleted.")
-            return 0
-
-        if args.list_chats:
-            run_wait_step("Connect Telegram", client.connect)
-            ensure_authorized()
-            py(f"Authorized: {client.is_user_authorized()}")
-            from telethon.utils import get_peer_id
-            filt = (args.chat_filter or "").strip().lower()
-            py("Chats (groups/channels):")
-            matched = 0
-            for d in client.iter_dialogs():
-                if not (d.is_group or d.is_channel):
-                    continue
-                ent = d.entity
-                peer_id = get_peer_id(ent)
-                access_hash = getattr(ent, "access_hash", None)
-                username = getattr(ent, "username", None)
-                name = (d.name or "")
-                if filt:
-                    hay = f"{name} {username or ''}".lower()
-                    if filt not in hay:
-                        continue
-                kind = "group"
-                if getattr(ent, "broadcast", False):
-                    kind = "channel"
-                elif getattr(ent, "megagroup", False):
-                    kind = "supergroup"
-                py(
-                    f"{name} | {kind} | peer_id={peer_id} | access_hash={access_hash} | username={username or ''}"
-                )
-                matched += 1
-            if filt and matched == 0:
-                py(f"No chats matched: {args.chat_filter}")
             return 0
 
         if args.pull_latest:
@@ -1027,8 +1009,6 @@ def main() -> int:
                 with open(args.path_file, "w", encoding="utf-8") as fh:
                     fh.write(dest_path)
 
-            if args.config_file and from_peer:
-                update_conf_file(args.config_file, updates={"telegram_from": from_peer})
             return 0
 
         run_wait_step("Connect Telegram", client.connect)
@@ -1101,8 +1081,6 @@ def main() -> int:
                 ),
             )
             py("Message sent.")
-            if args.config_file and to_peer:
-                update_conf_file(args.config_file, updates={"telegram_to": to_peer})
             return 0
 
         current_stage = "upload"
@@ -1141,8 +1119,6 @@ def main() -> int:
                         fh.write(f"file_name={os.path.basename(args.file)}\n")
             except OSError:
                 pass
-        if args.config_file and to_peer:
-            update_conf_file(args.config_file, updates={"telegram_to": to_peer})
     except KeyboardInterrupt:
         err("Interrupted by user.")
         return 130
