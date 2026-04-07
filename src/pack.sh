@@ -103,7 +103,7 @@ expand_home_path() {
     return 0
   fi
   if [[ "$path" == "~/"* && -n "${HOME:-}" ]]; then
-    printf '%s/%s' "$HOME" "${path#~/}"
+    printf '%s/%s' "$HOME" "${path#"~/"}"
     return 0
   fi
   printf '%s' "$path"

@@ -391,10 +391,9 @@ run_unpack_take_doctor() {
   validate_unpack_take_config
   build_unpack_args
   build_unpack_passthrough_args "$@"
-  "$runner" "${UNPACK_ARGS[@]}" "${UNPACK_PASSTHROUGH_ARGS[@]}" --dry-run >/dev/null
   local tg_args=()
   append_unpack_take_telegram_args tg_args
-  "$runner" --telegram-doctor "${tg_args[@]}" >/dev/null
+  "$runner" "${UNPACK_ARGS[@]}" "${UNPACK_PASSTHROUGH_ARGS[@]}" --telegram-doctor "${tg_args[@]}" >/dev/null
   printf '[APP] unpack take doctor: configuration and Telegram prerequisites look healthy.\n'
 }
 

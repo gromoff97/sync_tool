@@ -1,3 +1,4 @@
+import os
 import pathlib
 import shutil
 import subprocess
@@ -210,6 +211,52 @@ class CliDoctorTests(unittest.TestCase):
 
         self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
 
+    def test_pack_dry_run_expands_tilde_output_dir_against_home(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp_root = pathlib.Path(td)
+            tool_root = self.make_tool_copy(temp_root)
+            repo = temp_root / "repo"
+            fake_home = temp_root / "home"
+            repo.mkdir()
+            fake_home.mkdir()
+
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Codex"], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "codex@example.com"],
+                cwd=repo,
+                check=True,
+            )
+            (repo / "README.md").write_text("hello\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+            (tool_root / "conf.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [pack]
+                    output_dir = "~/syncpacks"
+                    pack_prefix = "syncpack"
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env["HOME"] = str(fake_home)
+            completed = subprocess.run(
+                [str(tool_root / "pack"), "--dry-run"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                env=env,
+            )
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertIn(f"[APP] Out: {fake_home / 'syncpacks'}", completed.stdout)
+        self.assertNotIn(f"{fake_home}/~/syncpacks", completed.stdout)
+
     def test_pack_send_doctor_cli_proxy_override_replaces_config_proxy_family(self):
         with tempfile.TemporaryDirectory() as td:
             repo = pathlib.Path(td) / "repo"
@@ -411,6 +458,70 @@ class CliDoctorTests(unittest.TestCase):
 
         self.assertNotEqual(0, completed.returncode)
         self.assertIn("--ff-only must be 0|1", completed.stdout + completed.stderr)
+
+    def test_unpack_take_doctor_uses_telegram_doctor_path_not_local_dry_run(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp_root = pathlib.Path(td)
+            tool_root = self.make_tool_copy(temp_root)
+            workdir = temp_root / "work"
+            workdir.mkdir()
+            args_log = temp_root / "runner-args.log"
+
+            (tool_root / "conf.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [unpack]
+                    pack_dir = "/tmp/packs"
+                    pack_prefix = "syncpack"
+                    peer = "sync"
+                    ff_only = true
+
+                    [unpack.take.telegram]
+                    from = "@source"
+
+                    [telegram.common]
+                    api_id = 1
+                    api_hash = "hash"
+                    session = "sess"
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            (tool_root / "src" / "unpack.sh").write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    printf '%s\\n' "$@" > {args_log!s}
+                    if [[ " $* " == *" --telegram-doctor "* ]]; then
+                      exit 0
+                    fi
+                    printf '[ERR] unexpected non-telegram doctor invocation\\n' >&2
+                    exit 97
+                    """
+                ),
+                encoding="utf-8",
+            )
+            os.chmod(tool_root / "src" / "unpack.sh", 0o755)
+
+            completed = subprocess.run(
+                [str(tool_root / "unpack"), "take", "doctor"],
+                cwd=workdir,
+                text=True,
+                capture_output=True,
+            )
+
+            logged_args = args_log.read_text(encoding="utf-8")
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertIn("--telegram-doctor", logged_args)
+        self.assertNotIn("--dry-run", logged_args)
+        self.assertIn(
+            "unpack take doctor: configuration and Telegram prerequisites look healthy.",
+            completed.stdout + completed.stderr,
+        )
 
     def test_unpack_take_inside_repo_ignores_mismatched_project_name_with_warning(self):
         with tempfile.TemporaryDirectory() as td:
