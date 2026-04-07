@@ -290,6 +290,7 @@ append_telegram_proxy_args() {
   elif [[ "$TG_PROXY_TYPE" == "mtproto" ]]; then
     _cmd_ref+=(--mtproto-host "$TG_MTPROTO_HOST" --mtproto-port "$TG_MTPROTO_PORT" --mtproto-secret "$TG_MTPROTO_SECRET")
   fi
+  return 0
 }
 
 python_version_at_least_cmd() {

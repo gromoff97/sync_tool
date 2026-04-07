@@ -369,6 +369,142 @@ class CliDoctorTests(unittest.TestCase):
         self.assertNotEqual(0, completed.returncode)
         self.assertIn("Refusing to write packs inside the repository", completed.stdout + completed.stderr)
 
+    def test_pack_send_doctor_http_proxy_without_credentials_reaches_runner(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp_root = pathlib.Path(td)
+            tool_root = self.make_tool_copy(temp_root)
+            repo = temp_root / "repo"
+            repo.mkdir()
+            args_log = temp_root / "pack-send-doctor-args.log"
+
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Codex"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "codex@example.com"], cwd=repo, check=True)
+            (repo / "README.md").write_text("hello\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+            (tool_root / "conf.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [pack]
+                    output_dir = "/tmp/out"
+                    pack_prefix = "syncpack"
+
+                    [pack.send.telegram]
+                    to = "@target"
+
+                    [telegram.common]
+                    api_id = 1
+                    api_hash = "hash"
+                    session = "sess"
+
+                    [telegram.common.proxy.http]
+                    host = "proxy.example.com"
+                    port = 8080
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            (tool_root / "src" / "pack.sh").write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    printf '%s\\n' "$@" > {args_log!s}
+                    exit 0
+                    """
+                ),
+                encoding="utf-8",
+            )
+            os.chmod(tool_root / "src" / "pack.sh", 0o755)
+
+            completed = subprocess.run(
+                [str(tool_root / "pack"), "send", "doctor"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+            )
+
+            logged_args = args_log.read_text(encoding="utf-8")
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertIn("--telegram-doctor", logged_args)
+        self.assertIn("--http-host", logged_args)
+        self.assertIn("--http-port", logged_args)
+        self.assertNotIn("--http-user", logged_args)
+        self.assertNotIn("--http-password", logged_args)
+
+    def test_pack_send_http_proxy_without_credentials_reaches_runner(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp_root = pathlib.Path(td)
+            tool_root = self.make_tool_copy(temp_root)
+            repo = temp_root / "repo"
+            repo.mkdir()
+            args_log = temp_root / "pack-send-args.log"
+
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Codex"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "codex@example.com"], cwd=repo, check=True)
+            (repo / "README.md").write_text("hello\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+            (tool_root / "conf.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [pack]
+                    output_dir = "/tmp/out"
+                    pack_prefix = "syncpack"
+
+                    [pack.send.telegram]
+                    to = "@target"
+
+                    [telegram.common]
+                    api_id = 1
+                    api_hash = "hash"
+                    session = "sess"
+
+                    [telegram.common.proxy.http]
+                    host = "proxy.example.com"
+                    port = 8080
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            (tool_root / "src" / "pack.sh").write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    printf '%s\\n' "$@" > {args_log!s}
+                    exit 0
+                    """
+                ),
+                encoding="utf-8",
+            )
+            os.chmod(tool_root / "src" / "pack.sh", 0o755)
+
+            completed = subprocess.run(
+                [str(tool_root / "pack"), "send"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+            )
+
+            logged_args = args_log.read_text(encoding="utf-8")
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertIn("send", logged_args)
+        self.assertIn("--http-host", logged_args)
+        self.assertIn("--http-port", logged_args)
+        self.assertNotIn("--http-user", logged_args)
+        self.assertNotIn("--http-password", logged_args)
+
     def test_unpack_take_doctor_cli_proxy_override_replaces_config_proxy_family(self):
         with tempfile.TemporaryDirectory() as td:
             workdir = pathlib.Path(td)
@@ -420,6 +556,68 @@ class CliDoctorTests(unittest.TestCase):
             "telegram_socks5_* and telegram_mtproto_* keys are not allowed when telegram_proxy_type=http",
             combined,
         )
+
+    def test_unpack_take_doctor_http_proxy_without_credentials_reaches_runner(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp_root = pathlib.Path(td)
+            tool_root = self.make_tool_copy(temp_root)
+            workdir = temp_root / "work"
+            workdir.mkdir()
+            args_log = temp_root / "unpack-take-doctor-args.log"
+
+            (tool_root / "conf.toml").write_text(
+                textwrap.dedent(
+                    """
+                    [unpack]
+                    pack_dir = "/tmp/packs"
+                    pack_prefix = "syncpack"
+                    peer = "sync"
+
+                    [unpack.take.telegram]
+                    from = "@source"
+
+                    [telegram.common]
+                    api_id = 1
+                    api_hash = "hash"
+                    session = "sess"
+
+                    [telegram.common.proxy.http]
+                    host = "proxy.example.com"
+                    port = 8080
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            (tool_root / "src" / "unpack.sh").write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    printf '%s\\n' "$@" > {args_log!s}
+                    exit 0
+                    """
+                ),
+                encoding="utf-8",
+            )
+            os.chmod(tool_root / "src" / "unpack.sh", 0o755)
+
+            completed = subprocess.run(
+                [str(tool_root / "unpack"), "take", "doctor"],
+                cwd=workdir,
+                text=True,
+                capture_output=True,
+            )
+
+            logged_args = args_log.read_text(encoding="utf-8")
+
+        self.assertEqual(0, completed.returncode, completed.stdout + completed.stderr)
+        self.assertIn("--telegram-doctor", logged_args)
+        self.assertIn("--http-host", logged_args)
+        self.assertIn("--http-port", logged_args)
+        self.assertNotIn("--http-user", logged_args)
+        self.assertNotIn("--http-password", logged_args)
 
     def test_unpack_take_doctor_rejects_invalid_unpack_config_before_telegram(self):
         with tempfile.TemporaryDirectory() as td:

@@ -241,6 +241,7 @@ append_pack_send_telegram_args() {
       _args_ref+=(--mtproto-host "${CFG_TELEGRAM_PROXY_HOST:-}" --mtproto-port "${CFG_TELEGRAM_PROXY_PORT:-}" --mtproto-secret "${CFG_TELEGRAM_PROXY_SECRET:-}")
       ;;
   esac
+  return 0
 }
 
 validate_pack_runtime_config() {
